@@ -10,26 +10,94 @@
 
 WebServer server(80);
 
-static String buildResponse(String title, String color, String icon, String villa, String msg) {
-  return R"rawliteral(
-  <html><head><meta name="viewport" content="width=device-width, initial-scale=1">
-  <style>
-  body{display:flex;justify-content:center;align-items:center;height:100vh;font-family:Arial;text-align:center;background:#f5f5f5;}
-  .card{padding:30px;border-radius:12px;background:white;box-shadow:0 4px 10px rgba(0,0,0,0.1);}
-  .icon{font-size:60px;color:)rawliteral" +
-         color + R"rawliteral(;}
-  </style></head><body>
-  <div class="card">
-  <div class="icon">)rawliteral" +
-         icon + R"rawliteral(</div>
-  <h2 style="color:)rawliteral" +
-         color + R"rawliteral(;">)rawliteral" +
-         title + R"rawliteral(</h2>
-  <h3>Villa: )rawliteral" +
-         villa + R"rawliteral(</h3>
-  <p>)rawliteral" +
-         msg + R"rawliteral(</p>
-  </div></body></html>)rawliteral";
+/** Escape text / attributes so UTF-8 emoji and user data don't break HTML. */
+static String htmlEscape(const String& s) {
+  String o;
+  o.reserve(s.length() + 16);
+  for (size_t i = 0; i < s.length(); i++) {
+    char c = s[i];
+    switch (c) {
+      case '&':
+        o += "&amp;";
+        break;
+      case '<':
+        o += "&lt;";
+        break;
+      case '>':
+        o += "&gt;";
+        break;
+      case '"':
+        o += "&quot;";
+        break;
+      default:
+        o += c;
+        break;
+    }
+  }
+  return o;
+}
+
+/** Use <img src="..."> for URLs or data:image/...; base64 must be passed as full data URL string. */
+static bool iconLooksLikeImageSrc(const String& icon) {
+  if (icon.length() == 0) {
+    return false;
+  }
+  if (icon.startsWith("http://") || icon.startsWith("https://")) {
+    return true;
+  }
+  if (icon.startsWith("data:image")) {
+    return true;
+  }
+  if (icon[0] == '/') {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Build HTML card. `icon` is either:
+ * - Short label / emoji (shown as styled text), or
+ * - Image URL or data URL (e.g. data:image/png;base64,....) for <img src="...">.
+ * Do not pass raw binary image bytes as String — only a proper URL or data: URI.
+ */
+static String buildResponse(const String& title, const String& color, const String& icon, const String& villa,
+                            const String& msg) {
+  String iconBlock;
+  if (iconLooksLikeImageSrc(icon)) {
+    iconBlock = "<img class=\"icon-img\" alt=\"\" src=\"";
+    iconBlock += htmlEscape(icon);
+    iconBlock += "\">";
+  } else {
+    iconBlock = "<span class=\"icon-emoji\" style=\"color:";
+    iconBlock += htmlEscape(color);
+    iconBlock += ";\">";
+    iconBlock += htmlEscape(icon);
+    iconBlock += "</span>";
+  }
+
+  String html;
+  html.reserve(400 + title.length() + villa.length() + msg.length() + icon.length());
+  html += "<!DOCTYPE html><html><head><meta charset=\"UTF-8\">";
+  html += "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">";
+  html += "<style>";
+  html += "body{display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;";
+  html += "font-family:Arial,sans-serif;text-align:center;background:#f5f5f5;}";
+  html += ".card{padding:30px;border-radius:12px;background:#fff;box-shadow:0 4px 10px rgba(0,0,0,0.1);";
+  html += "max-width:92%;}";
+  html += ".icon-emoji{font-size:60px;line-height:1.2;display:block;margin-bottom:8px;}";
+  html += ".icon-img{display:block;margin:8px auto;max-width:96px;max-height:96px;object-fit:contain;}";
+  html += "</style></head><body><div class=\"card\">";
+  html += iconBlock;
+  html += "<h2 style=\"color:";
+  html += htmlEscape(color);
+  html += ";\">";
+  html += htmlEscape(title);
+  html += "</h2><h3>Villa: ";
+  html += htmlEscape(villa);
+  html += "</h3><p>";
+  html += htmlEscape(msg);
+  html += "</p></div></body></html>";
+  return html;
 }
 
 /** Prefer long name, fall back to short query key (e.g. villa / v). */

@@ -21,9 +21,9 @@
  */
 #define MAX_RESIDENTS_PER_VILLA 4
 
-/** Soft-AP credentials — change before deployment. */
-#define AP_SSID "Gate-Access"
-#define AP_PASSWORD "12345678"
+/** Soft-AP credentials — defined in config.cpp (not macros: avoids name clash with variables). */
+extern const char* AP_SSID;
+extern const char* AP_PASSWORD;
 
 /**
  * /adduser protection: if this string is non-empty, callers must pass query param
