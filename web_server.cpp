@@ -10,6 +10,15 @@
 
 WebServer server(80);
 
+/**
+ * Green checkmark for successful gate open (inline SVG).
+ * Emoji ticks often ignore CSS color in browsers; this stays visibly green (#22c55e).
+ */
+static const char GATE_ICON_OK[] =
+    "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' "
+    "fill='none' stroke='%2322c55e' stroke-width='2.8' stroke-linecap='round' "
+    "stroke-linejoin='round'><path d='M20 6L9 17l-5-5'/></svg>";
+
 /** Escape text / attributes so UTF-8 emoji and user data don't break HTML. */
 static String htmlEscape(const String& s) {
   String o;
@@ -179,7 +188,7 @@ static void handleOpen() {
 
   triggerRelay();
 
-  server.send(200, "text/html", buildResponse("Access Granted", "green", "✔️", villa, ""));
+  server.send(200, "text/html", buildResponse("Access Granted", "green", GATE_ICON_OK, villa, ""));
   addLog(villa, mobile, "GRANTED");
 }
 
