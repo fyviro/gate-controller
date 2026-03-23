@@ -58,24 +58,22 @@ static void handleOpen() {
   String ts = server.arg("t");
   String sig = server.arg("s");
   String deviceId = server.arg("d");
-  String villaReq = argPrefer("villa", "v");
+  mobile.trim();
+  ts.trim();
+  sig.trim();
+  deviceId.trim();
 
   String key, villa, udeviceId;
 
-  if (mobile == "" || ts == "" || sig == "" || villaReq == "") {
-    server.send(403, "text/html", buildResponse("Access Denied", "red", "❌", villaReq, "Missing m, v/villa, t, or s"));
+  // Villa comes only from registration (lookup by mobile), not from the QR URL.
+  if (mobile == "" || ts == "" || sig == "") {
+    server.send(403, "text/html", buildResponse("Access Denied", "red", "❌", "-", "Missing m, t, or s"));
     return;
   }
 
   if (!getUser(mobile, key, villa, udeviceId)) {
-    server.send(403, "text/html", buildResponse("Access Denied", "red", "❌", villaReq, "Unknown mobile"));
-    addLog(villaReq, mobile, "Denied");
-    return;
-  }
-
-  if (villaReq != villa) {
-    server.send(403, "text/html", buildResponse("Access Denied", "red", "❌", villa, "Villa mismatch"));
-    addLog(villa, mobile, "Denied");
+    server.send(403, "text/html", buildResponse("Access Denied", "red", "❌", "-", "Unknown mobile"));
+    addLog("-", mobile, "Denied");
     return;
   }
 

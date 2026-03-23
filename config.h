@@ -14,10 +14,9 @@
  * Max distinct mobile numbers per villa (same villa id string). Map key is still mobile.
  *
  * QR /open (owner HTML must match):
- *   Query: m, v or villa, t, s, d
- *   HMAC payload = mobile + timestamp  (villa is NOT part of the signature)
+ *   Query: m, t, s, d  (villa is NOT sent — server uses villa from registration for that mobile)
+ *   HMAC payload = mobile + timestamp
  *   s = hex HMAC-SHA256(secret, payload)
- *   Villa in URL must still match the villa stored for that mobile (separate check).
  *   d: required on first open (binds device); must match on every later open.
  */
 #define MAX_RESIDENTS_PER_VILLA 4

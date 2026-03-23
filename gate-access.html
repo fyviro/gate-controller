@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Gate Access</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- One file for owners. Needs internet once to load QR library. -->
+  <script src="https://cdn.jsdelivr.net/npm/qrcode/build/qrcode.min.js"></script>
+  <style>
+    body { margin: 0; font-family: Arial; background: #0f172a; color: #fff; }
+    .container { padding: 20px; text-align: center; max-width: 400px; margin: 0 auto; }
+    input {
+      width: 90%; padding: 14px; margin: 10px 0; font-size: 16px;
+      border-radius: 8px; border: none; box-sizing: border-box;
+    }
+    button {
+      width: 90%; padding: 16px; margin: 8px 0; font-size: 18px;
+      border-radius: 10px; border: none; cursor: pointer;
+    }
+    .save { background: #475569; color: #fff; }
+    .go { background: #22c55e; color: #fff; }
+    #qrScreen {
+      display: none; min-height: 100vh; width: 100%;
+      justify-content: center; align-items: center; padding: 16px; box-sizing: border-box;
+    }
+    .qr-card {
+      background: #fff; color: #000; width: 90%; max-width: 360px;
+      border-radius: 20px; padding: 20px; text-align: center;
+    }
+    #qrcode canvas { width: 260px; height: 260px; padding: 12px; }
+    .timer { font-size: 22px; font-weight: bold; color: #dc2626; }
+    .share { background: #2563eb; color: #fff; margin-top: 12px; }
+    .back { background: #e5e7eb; color: #000; margin-top: 8px; }
+    #hint { font-size: 12px; color: #666; margin-top: 8px; }
+  </style>
+</head>
+<body>
+
+<div class="container" id="formScreen">
+  <h2>Gate Access</h2>
+  <p style="color:#94a3b8;font-size:14px;">Generate a QR for your visitor to show at the gate.</p>
+
+  <input id="mobile" placeholder="Mobile (as registered)">
+  <input id="ownerKey" type="password" placeholder="Your secret (as registered)">
+
+  <button type="button" class="save" onclick="save()">Save</button>
+  <button type="button" class="go" onclick="generate()">Generate QR</button>
+</div>
+
+<div id="qrScreen">
+  <div class="qr-card">
+    <h2>Show at gate</h2>
+    <p style="color:#666;">Send to your visitor or show them this screen.</p>
+    <div id="qrcode"></div>
+    <p>Expires in <span id="timer" class="timer">05:00</span></p>
+    <button type="button" class="share" onclick="shareQR()">Share QR</button>
+    <p id="hint">If sharing fails, take screenshot and share.</p>
+    <button type="button" class="back" onclick="goBack()">Back</button>
+  </div>
+</div>
+
+<script>
+var currentCanvas = null;
+var expiryTime = 0;
+var timerInterval = null;
+var QR_VALID_SEC = 300;
+/* ESP32 Soft AP default — same for everyone on Gate-Access Wi-Fi */
+var GATE_BASE = "http://192.168.4.1";
+
+function getDeviceId() {
+  var id = localStorage.getItem("gateDeviceId");
+  if (!id) {
+    id = (crypto.randomUUID && crypto.randomUUID()) || ("dev-" + Math.random().toString(36).slice(2));
+    localStorage.setItem("gateDeviceId", id);
+  }
+  return id;
+}
+
+function save() {
+  localStorage.setItem("gateMobile", document.getElementById("mobile").value.trim());
+  localStorage.setItem("gateOwnerKey", document.getElementById("ownerKey").value);
+  alert("Saved");
+}
+
+window.onload = function () {
+  if (localStorage.getItem("gateMobile")) document.getElementById("mobile").value = localStorage.getItem("gateMobile");
+  if (localStorage.getItem("gateOwnerKey")) document.getElementById("ownerKey").value = localStorage.getItem("gateOwnerKey");
+};
+
+async function generate() {
+  var m = document.getElementById("mobile").value.trim();
+  var k = document.getElementById("ownerKey").value;
+  if (!m || !k) {
+    alert("Enter mobile and secret");
+    return;
+  }
+  if (!window.crypto || !crypto.subtle) {
+    alert("Could not create QR. Try another browser.");
+    return;
+  }
+
+  var t = Math.floor(Date.now() / 1000);
+  var tStr = String(t);
+  var deviceId = getDeviceId();
+  var payload = m + tStr;
+  var enc = new TextEncoder();
+  var cryptoKey;
+  var sigBuf;
+  try {
+    cryptoKey = await crypto.subtle.importKey(
+      "raw", enc.encode(k),
+      { name: "HMAC", hash: "SHA-256" },
+      false, ["sign"]
+    );
+    sigBuf = await crypto.subtle.sign("HMAC", cryptoKey, enc.encode(payload));
+  } catch (e) {
+    alert("Could not create QR. Check mobile and secret.");
+    return;
+  }
+  var sig = Array.from(new Uint8Array(sigBuf))
+    .map(function (b) { return b.toString(16).padStart(2, "0"); })
+    .join("");
+
+  var url =
+    GATE_BASE +
+    "/open?m=" +
+    encodeURIComponent(m) +
+    "&t=" +
+    encodeURIComponent(tStr) +
+    "&d=" +
+    encodeURIComponent(deviceId) +
+    "&s=" +
+    encodeURIComponent(sig);
+
+  document.getElementById("qrcode").innerHTML = "";
+  QRCode.toCanvas(document.createElement("canvas"), url, { width: 260 }, function (err, canvas) {
+    if (err) {
+      alert("QR failed");
+      return;
+    }
+    currentCanvas = canvas;
+    document.getElementById("qrcode").appendChild(canvas);
+    document.getElementById("formScreen").style.display = "none";
+    document.getElementById("qrScreen").style.display = "flex";
+  });
+
+  expiryTime = t + QR_VALID_SEC;
+  if (timerInterval) clearInterval(timerInterval);
+  timerInterval = setInterval(function () {
+    var now = Math.floor(Date.now() / 1000);
+    var left = expiryTime - now;
+    if (left <= 0) {
+      clearInterval(timerInterval);
+      document.getElementById("timer").innerText = "Expired";
+      alert("QR expired — generate again");
+      return;
+    }
+    var mm = Math.floor(left / 60);
+    var ss = left % 60;
+    document.getElementById("timer").innerText = mm + ":" + (ss < 10 ? "0" : "") + ss;
+  }, 1000);
+}
+
+function shareQR() {
+  if (!currentCanvas) {
+    alert("Generate QR first");
+    return;
+  }
+  currentCanvas.toBlob(function (blob) {
+    var file = new File([blob], "gate_qr.png", { type: "image/png" });
+    if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+      navigator.share({ files: [file], title: "Gate QR" }).catch(function () {
+        alert("If sharing fails, take screenshot and share.");
+      });
+    } else {
+      alert("If sharing fails, take screenshot and share.");
+    }
+  });
+}
+
+function goBack() {
+  if (timerInterval) clearInterval(timerInterval);
+  document.getElementById("qrScreen").style.display = "none";
+  document.getElementById("formScreen").style.display = "block";
+}
+</script>
+
+</body>
+</html>

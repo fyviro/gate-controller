@@ -9,7 +9,7 @@ void usersInit();
 bool getUser(String mobile, String& key, String& villa, String& deviceId);
 
 /**
- * Enforce device binding after HMAC + villa checks.
+ * Enforce device binding after HMAC + time checks.
  * If stored deviceId is empty: requires non-empty requestDeviceId, saves it to NVS.
  * If stored deviceId is set: requestDeviceId must match exactly.
  */

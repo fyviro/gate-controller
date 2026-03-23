@@ -29,19 +29,18 @@ This document matches the current firmware (`gate_controller.ino`, `web_server.c
 
 ## B. Open gate (`GET /open`)
 
-**Query:** `m`, `v` or `villa`, `t`, `s`, `d`
+**Query:** `m`, `t`, `s`, `d` — **no villa in URL**; villa for logs/UI comes from the user record keyed by `m`.
 
 | Step | Check |
 |------|--------|
-| 1 | All of `m`, `v`/`villa`, `t`, `s` non-empty |
+| 1 | `m`, `t`, `s` non-empty |
 | 2 | `getUser(m)` → unknown mobile → 403 |
-| 3 | Request villa **==** stored villa for that mobile → else 403 “Villa mismatch” |
-| 4 | `t` is 9–12 decimal digits only → else 403 “Invalid timestamp” |
-| 5 | `payload = m + t` (string concat, **no villa in HMAC**) |
-| 6 | `expected = hex(HMAC-SHA256(owner_key, payload))` — compare to `s` **case-insensitive** |
-| 7 | `abs(rtc.unixnow - t) <= QR_VALID_WINDOW_SEC` → else 403 “QR Expired” |
-| 8 | `usersEnsureDeviceBinding(m, d)` — see below |
-| 9 | `triggerRelay()` → 200 “Access Granted” + log |
+| 3 | `t` is 9–12 decimal digits only → else 403 “Invalid timestamp” |
+| 4 | `payload = m + t` (string concat) |
+| 5 | `expected = hex(HMAC-SHA256(owner_key, payload))` — compare to `s` **case-insensitive** |
+| 6 | `abs(rtc.unixnow - t) <= QR_VALID_WINDOW_SEC` → else 403 “QR Expired” |
+| 7 | `usersEnsureDeviceBinding(m, d)` — see below |
+| 8 | `triggerRelay()` → 200 “Access Granted” + log |
 
 ### Device binding (`usersEnsureDeviceBinding`)
 
@@ -50,7 +49,10 @@ This document matches the current firmware (`gate_controller.ino`, `web_server.c
 
 ## C. Owner / QR HTML tool (must match firmware)
 
-1. Same `mobile`, `villa`, and `owner_key` as registered via `/adduser`.
+Reference implementation in-repo: **`gate-access.html`** (resident phone; QR encodes `http://192.168.4.1/open?...` — ESP32 Soft AP default).
+
+
+1. Same `mobile` and `owner_key` as registered via `/adduser` (villa is only on the server).
 2. `t` = current unix time in **seconds** (string of digits only).
 3. `s` = HMAC-SHA256(`owner_key`, `mobile + t`), **hex** (upper or lower case accepted by device).
 4. URL includes `d` = stable device id (first successful open **binds** it).
@@ -58,8 +60,22 @@ This document matches the current firmware (`gate_controller.ino`, `web_server.c
 Example path shape:
 
 ```text
-/open?m=...&v=...&t=...&s=...&d=...
+/open?m=...&t=...&s=...&d=...
 ```
+
+## Cross-check: `gate-access.html` vs firmware
+
+| Item | Client (`gate-access.html`) | Server (`web_server.cpp` + `auth.cpp`) |
+|------|-----------------------------|----------------------------------------|
+| Path | `GET /open?...` | `server.on("/open", handleOpen)` |
+| Params | `m`, `t`, `s`, `d` (URL-encoded in query string) | `server.arg("m|t|s|d")`, trimmed |
+| HMAC data | `mobile + String(unixSeconds)` UTF-8 | `mobile + ts` same string concat |
+| HMAC algo | Web Crypto `HMAC` + `SHA-256` | mbedTLS `MBEDTLS_MD_SHA256` |
+| Sig format | 64-char lowercase hex | Uppercase hex; compare **case-insensitive** |
+| Clock window | UI timer `QR_VALID_SEC = 300` | `QR_VALID_WINDOW_SEC` in `config.h` — **keep both 300** |
+| Device | Stable `localStorage` id, always sent as `d` | `usersEnsureDeviceBinding` |
+
+Optional: run `node scripts/verify-open-hmac.js <mobile> <secret> <t>` to print a signed query string using the same algorithm as the HTML page.
 
 ## D. Known limitations (by design)
 
@@ -69,4 +85,4 @@ Example path shape:
 
 ## E. Order sanity
 
-Villa is verified **before** HMAC so a wrong villa fails fast. HMAC is checked **before** expiry so signature is validated first. Device bind runs **after** crypto + time so failed QRs do not bind devices.
+Lookup by `m` supplies villa for logging/UI. HMAC is checked **before** expiry. Device bind runs **after** crypto + time so failed QRs do not bind devices.
