@@ -14,18 +14,48 @@ This document matches the current firmware (`gate_controller.ino`, `web_server.c
 - In-memory + NVS: `std::unordered_map` **key = mobile** (string).
 - Each record: `owner_key` (HMAC secret), `villa`, `deviceId` (empty until first successful `/open` with `d`).
 
-## A. Register resident (`GET /adduser` or `/adduer`)
+## A. Users API (`/adduser` and typo alias `/adduer`)
+
+Same params work in **query string** or **`application/x-www-form-urlencoded`** body for POST/PUT.
+
+### `GET` — list users (JSON)
+
+- **Response:** `[{"mobile":"...","villa":"...","deviceBound":true|false}, ...]` — **no secrets**.
+- **`deviceBound`** means “stored `deviceId` is non-empty” (same idea as first `/open` binding). It is **not** a separate field — if CSV had `""` as the 4th column without quote stripping, the literal two-quote string was wrongly stored; use `,,` / empty 4th field, or re-import after firmware strips quotes.
+- **Query:** `a=` if `ADDUSER_ADMIN_KEY` is set.
+
+### `POST` — create user
 
 | Param | Alt | Required | Notes |
 |-------|-----|----------|--------|
-| `villa` | `v` | yes | Villa id string |
-| `mobile` | `m` | yes | Map key; must be unique |
-| `secret` | `k` | yes | Stored as `owner_key` for HMAC |
-| `a` | — | if `ADDUSER_ADMIN_KEY` set | Must match macro |
-| `d` | — | ignored | Always stored empty; binding only via `/open` |
+| `villa` | `v` | yes | |
+| `mobile` | `m` | yes | Must not exist yet |
+| `secret` | `k` | yes | |
+| `a` | — | if admin key set | |
+| `d` | — | optional | If set, pre-stores device id (else bind on first `/open`) |
 
-**Checks:** admin token (if configured), field lengths, global `MAX_USERS`, **≤ `MAX_RESIDENTS_PER_VILLA` mobiles per same villa**, duplicate mobile rejected.  
-**Persist:** `usersSaveToNvs()` on success.
+**Checks:** admin, lengths, `MAX_USERS`, ≤ `MAX_RESIDENTS_PER_VILLA` per villa, duplicate mobile rejected.  
+**Persist:** NVS on success. **Response:** HTML success page.
+
+### `POST` — bulk CSV (`/adduser/bulk` or `/adduer/bulk`)
+
+- **Body:** `application/x-www-form-urlencoded` with `a=` (admin) and **`csv=`** — full CSV text (max **`MAX_CSV_IMPORT_BYTES`**, default 8192).
+- **Lines:** `mobile,secret,villa` or `mobile,secret,villa,deviceId` — **no commas inside fields**. `#` starts a comment line; blank lines skipped. Optional CSV-style quotes per field; **`""` in column 4 means empty device** (not the literal two-character id).
+- **Behaviour:** new mobile → **add**; existing mobile → **update** secret/villa; 4th column if present sets **deviceId** (empty 4th field clears it). **One NVS write** after all rows.
+- **Memory:** holds CSV in RAM plus a **temporary copy** of the user map while applying — fine for dozens of users; very large maps + huge CSV may stress heap on small ESP32 modules.
+- **Response:** `text/plain` summary (`Added n, updated m, errors k` + per-line messages).
+
+### `PUT` — update user
+
+| Param | Alt | Required | Notes |
+|-------|-----|----------|--------|
+| `mobile` | `m` | yes | Must already exist |
+| `secret` | `k` | no | Omit to keep current secret |
+| `villa` | `v` | no | Omit to keep current villa |
+| `reset_device` | — | no | `1` / `true` / `yes` clears `deviceId` (re-bind on next `/open`) |
+| `a` | — | if admin key set | |
+
+**Persist:** NVS on success. **Response:** HTML success page.
 
 ## B. Open gate (`GET /open`)
 

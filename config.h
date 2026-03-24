@@ -26,9 +26,15 @@ extern const char* AP_SSID;
 extern const char* AP_PASSWORD;
 
 /**
- * /adduser protection: if this string is non-empty, callers must pass query param
- * `a` with the same value. Leave empty only for lab / trusted networks.
+ * /adduser protection: if non-empty, callers must pass query param `a` with the same value.
+ * Example below is 10 letters — change it to your own secret before deployment.
  */
-#define ADDUSER_ADMIN_KEY ""
+#define ADDUSER_ADMIN_KEY "KxQmNpRjWt"
+
+/**
+ * Max size (bytes) of CSV text in POST /adduser/bulk field `csv`.
+ * Keeps RAM bounded on ESP32 (~8 KB + one copy of user map during import).
+ */
+#define MAX_CSV_IMPORT_BYTES 8192
 
 #endif

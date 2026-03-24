@@ -6,6 +6,9 @@
 /** Seed built-in users; call once from setup() before serving HTTP. */
 void usersInit();
 
+/** True if admin token is acceptable for /adduser APIs (see ADDUSER_ADMIN_KEY in config.h). */
+bool usersRequireAdmin(const String& adminToken, String& errMsg);
+
 bool getUser(String mobile, String& key, String& villa, String& deviceId);
 
 /**
@@ -22,8 +25,29 @@ bool usersEnsureDeviceBinding(const String& mobile, const String& requestDeviceI
  * @param adminToken value of query param `a`; must match ADDUSER_ADMIN_KEY when that macro is non-empty.
  * @param errMsg human-readable failure reason when returning false.
  */
+/** If deviceId non-empty, store it (CSV/bulk); web POST usually leaves empty. */
 bool usersAdd(const String& mobile, const String& secretKey, const String& villa, const String& deviceId,
               const String& adminToken, String& errMsg);
+
+/**
+ * Update an existing user (mobile must exist).
+ * Empty secretKey → keep current secret. Empty villa → keep current villa.
+ * resetDeviceBinding → clear stored device id (visitor must re-bind on next /open).
+ */
+bool usersUpdate(const String& mobile, const String& secretKey, const String& villa, bool resetDeviceBinding,
+                 const String& adminToken, String& errMsg);
+
+/** JSON array: [{"mobile":"...","villa":"...","deviceBound":true}, ...] (no secrets). */
+void usersBuildJsonList(String& out);
+
+/**
+ * Bulk import from CSV (POST /adduser/bulk, form field `csv`).
+ * Rows: mobile,secret,villa[,deviceId] — no commas inside fields. Lines starting with # ignored.
+ * 3 columns: device unchanged on update; empty device on new user.
+ * 4 columns: set deviceId (empty 4th field clears binding). New users upserted; existing updated.
+ * One NVS write at end; uses ~2× user map RAM briefly. Max length MAX_CSV_IMPORT_BYTES.
+ */
+bool usersImportCsv(const String& csv, const String& adminToken, String& summary, String& errMsg);
 
 /** Current number of registered users (for diagnostics). */
 size_t usersCount();

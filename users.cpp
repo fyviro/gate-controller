@@ -34,15 +34,17 @@ static const char kNvsNamespace[] = "gateUsrs";
 
 static std::string toStd(const String& s) { return std::string(s.c_str()); }
 
-static size_t countResidentsForVilla(const std::string& villa) {
+static size_t countResidentsForVillaIn(const std::unordered_map<std::string, UserRecord>& m, const std::string& villa) {
   size_t n = 0;
-  for (const auto& kv : g_users) {
+  for (const auto& kv : m) {
     if (kv.second.villa == villa) {
       n++;
     }
   }
   return n;
 }
+
+static size_t countResidentsForVilla(const std::string& villa) { return countResidentsForVillaIn(g_users, villa); }
 
 static void nvsMakeKey(char* buf, size_t buflen, char prefix, unsigned index) {
   snprintf(buf, buflen, "%c%03u", prefix, index);
@@ -165,6 +167,14 @@ static bool adminTokenOk(const String& adminToken) {
   return adminToken == String(required);
 }
 
+bool usersRequireAdmin(const String& adminToken, String& errMsg) {
+  if (!adminTokenOk(adminToken)) {
+    errMsg = "Invalid or missing admin key (param a)";
+    return false;
+  }
+  return true;
+}
+
 void usersInit() {
   if (!g_users.empty()) {
     return;
@@ -235,7 +245,6 @@ bool usersEnsureDeviceBinding(const String& mobile, const String& requestDeviceI
 
 bool usersAdd(const String& mobile, const String& secretKey, const String& villa, const String& deviceId,
               const String& adminToken, String& errMsg) {
-  (void)deviceId;
   if (!adminTokenOk(adminToken)) {
     errMsg = "Invalid or missing admin key (param a)";
     return false;
@@ -246,7 +255,8 @@ bool usersAdd(const String& mobile, const String& secretKey, const String& villa
     return false;
   }
 
-  if (mobile.length() > MAX_MOBILE_LEN || secretKey.length() > MAX_SECRET_LEN || villa.length() > MAX_VILLA_LEN) {
+  if (mobile.length() > MAX_MOBILE_LEN || secretKey.length() > MAX_SECRET_LEN || villa.length() > MAX_VILLA_LEN ||
+      deviceId.length() > MAX_DEVICE_LEN) {
     errMsg = "Field too long";
     return false;
   }
@@ -272,7 +282,7 @@ bool usersAdd(const String& mobile, const String& secretKey, const String& villa
   rec.mobile = m;
   rec.owner_key = toStd(secretKey);
   rec.villa = villaStd;
-  rec.deviceId = "";
+  rec.deviceId = deviceId.length() > 0 ? toStd(deviceId) : "";
 
   const auto inserted = g_users.emplace(std::move(m), std::move(rec));
   if (!inserted.second) {
@@ -285,6 +295,257 @@ bool usersAdd(const String& mobile, const String& secretKey, const String& villa
     errMsg = "NVS save failed";
     return false;
   }
+  return true;
+}
+
+static void jsonAppendEscaped(String& out, const String& s) {
+  out += '"';
+  for (size_t i = 0; i < s.length(); i++) {
+    char c = s[i];
+    if (c == '"' || c == '\\') {
+      out += '\\';
+      out += c;
+    } else if (c == '\n') {
+      out += "\\n";
+    } else if (c == '\r') {
+      out += "\\r";
+    } else if (c == '\t') {
+      out += "\\t";
+    } else {
+      out += c;
+    }
+  }
+  out += '"';
+}
+
+void usersBuildJsonList(String& out) {
+  out = "";
+  out.reserve(g_users.size() * 48 + 4);
+  out += '[';
+  std::vector<std::string> sorted;
+  sorted.reserve(g_users.size());
+  for (const auto& kv : g_users) {
+    sorted.push_back(kv.first);
+  }
+  std::sort(sorted.begin(), sorted.end());
+  bool first = true;
+  for (const auto& mkey : sorted) {
+    const UserRecord& r = g_users.at(mkey);
+    if (!first) {
+      out += ',';
+    }
+    first = false;
+    out += "{\"mobile\":";
+    jsonAppendEscaped(out, String(r.mobile.c_str()));
+    out += ",\"villa\":";
+    jsonAppendEscaped(out, String(r.villa.c_str()));
+    out += ",\"deviceBound\":";
+    out += r.deviceId.empty() ? "false" : "true";
+    out += '}';
+  }
+  out += ']';
+}
+
+bool usersUpdate(const String& mobile, const String& secretKey, const String& villa, bool resetDeviceBinding,
+                 const String& adminToken, String& errMsg) {
+  if (!adminTokenOk(adminToken)) {
+    errMsg = "Invalid or missing admin key (param a)";
+    return false;
+  }
+
+  if (mobile.length() == 0) {
+    errMsg = "Missing mobile";
+    return false;
+  }
+
+  if (mobile.length() > MAX_MOBILE_LEN) {
+    errMsg = "Field too long";
+    return false;
+  }
+
+  if (secretKey.length() > MAX_SECRET_LEN || villa.length() > MAX_VILLA_LEN) {
+    errMsg = "Field too long";
+    return false;
+  }
+
+  std::string m = toStd(mobile);
+  auto it = g_users.find(m);
+  if (it == g_users.end()) {
+    errMsg = "Mobile not registered";
+    return false;
+  }
+
+  if (villa.length() > 0) {
+    const std::string villaStd = toStd(villa);
+    if (villaStd != it->second.villa) {
+      if (countResidentsForVilla(villaStd) >= MAX_RESIDENTS_PER_VILLA) {
+        errMsg = "Villa already has max residents (" + String(MAX_RESIDENTS_PER_VILLA) + ")";
+        return false;
+      }
+      it->second.villa = villaStd;
+    }
+  }
+
+  if (secretKey.length() > 0) {
+    it->second.owner_key = toStd(secretKey);
+  }
+
+  if (resetDeviceBinding) {
+    it->second.deviceId.clear();
+  }
+
+  if (!usersSaveToNvs()) {
+    errMsg = "NVS save failed";
+    return false;
+  }
+  return true;
+}
+
+/** Trim spaces and strip one pair of surrounding "..." (CSV-style empty is "" → empty string). */
+static void normalizeCsvField(String& s) {
+  s.trim();
+  if (s.length() >= 2 && s.charAt(0) == '"' && s.charAt(s.length() - 1) == '"') {
+    s = s.substring(1, s.length() - 1);
+    s.trim();
+  }
+}
+
+static bool splitUserCsvLine(const String& line, String& mobile, String& secret, String& villa, String& deviceId,
+                             bool& hasDeviceCol) {
+  String parts[4];
+  int n = 0;
+  int start = 0;
+  for (int i = 0; i <= line.length(); i++) {
+    if (i == line.length() || line.charAt(i) == ',') {
+      if (n >= 4) {
+        return false;
+      }
+      parts[n++] = line.substring(start, i);
+      start = i + 1;
+    }
+  }
+  if (n != 3 && n != 4) {
+    return false;
+  }
+  for (int i = 0; i < n; i++) {
+    normalizeCsvField(parts[i]);
+  }
+  mobile = parts[0];
+  secret = parts[1];
+  villa = parts[2];
+  hasDeviceCol = (n == 4);
+  deviceId = hasDeviceCol ? parts[3] : "";
+  return mobile.length() > 0 && secret.length() > 0 && villa.length() > 0;
+}
+
+bool usersImportCsv(const String& csv, const String& adminToken, String& summary, String& errMsg) {
+  summary = "";
+  if (!usersRequireAdmin(adminToken, errMsg)) {
+    return false;
+  }
+  if (csv.length() > MAX_CSV_IMPORT_BYTES) {
+    errMsg = "CSV too large (max " + String(MAX_CSV_IMPORT_BYTES) + " bytes)";
+    return false;
+  }
+
+  std::unordered_map<std::string, UserRecord> next = g_users;
+
+  int added = 0;
+  int updated = 0;
+  int errors = 0;
+  unsigned lineNo = 0;
+  size_t pos = 0;
+  String detail;
+  detail.reserve(256);
+
+  while (pos < csv.length()) {
+    size_t nl = csv.indexOf('\n', pos);
+    if (nl == (size_t)-1) {
+      nl = csv.length();
+    }
+    String line = csv.substring(pos, nl);
+    pos = nl + 1;
+    line.trim();
+    line.replace("\r", "");
+    lineNo++;
+    if (line.length() == 0 || line.charAt(0) == '#') {
+      continue;
+    }
+
+    String mobile, secret, villa, deviceId;
+    bool hasDevCol = false;
+    if (!splitUserCsvLine(line, mobile, secret, villa, deviceId, hasDevCol)) {
+      detail += "Line " + String(lineNo) + ": need mobile,secret,villa[,deviceId]\n";
+      errors++;
+      continue;
+    }
+
+    if (mobile.length() > MAX_MOBILE_LEN || secret.length() > MAX_SECRET_LEN || villa.length() > MAX_VILLA_LEN ||
+        deviceId.length() > MAX_DEVICE_LEN) {
+      detail += "Line " + String(lineNo) + ": field too long\n";
+      errors++;
+      continue;
+    }
+
+    const std::string ms = toStd(mobile);
+    const std::string villaStd = toStd(villa);
+    auto it = next.find(ms);
+
+    if (it == next.end()) {
+      if (next.size() >= MAX_USERS) {
+        detail += "Line " + String(lineNo) + ": user store full\n";
+        errors++;
+        continue;
+      }
+      if (countResidentsForVillaIn(next, villaStd) >= MAX_RESIDENTS_PER_VILLA) {
+        detail += "Line " + String(lineNo) + ": villa full\n";
+        errors++;
+        continue;
+      }
+      UserRecord rec;
+      rec.mobile = ms;
+      rec.owner_key = toStd(secret);
+      rec.villa = villaStd;
+      rec.deviceId = hasDevCol ? toStd(deviceId) : "";
+      std::string key = ms;
+      next.emplace(std::move(key), std::move(rec));
+      added++;
+    } else {
+      it->second.owner_key = toStd(secret);
+      if (villaStd != it->second.villa) {
+        size_t cnt = 0;
+        for (const auto& kv : next) {
+          if (kv.first == ms) {
+            continue;
+          }
+          if (kv.second.villa == villaStd) {
+            cnt++;
+          }
+        }
+        if (cnt >= MAX_RESIDENTS_PER_VILLA) {
+          detail += "Line " + String(lineNo) + ": villa full\n";
+          errors++;
+          continue;
+        }
+        it->second.villa = villaStd;
+      }
+      if (hasDevCol) {
+        it->second.deviceId = toStd(deviceId);
+      }
+      updated++;
+    }
+  }
+
+  g_users.swap(next);
+  if (!usersSaveToNvs()) {
+    g_users.swap(next);
+    errMsg = "NVS save failed; no changes applied";
+    summary = detail;
+    return false;
+  }
+
+  summary = "Added " + String(added) + ", updated " + String(updated) + ", errors " + String(errors) + ".\n" + detail;
+  errMsg = "";
   return true;
 }
 

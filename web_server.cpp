@@ -217,7 +217,21 @@ static void handleLogs() {
   server.send(200, "text/html", html);
 }
 
-static void handleAddUser() {
+/** GET /adduser — list users as JSON (no secrets). Query: a= admin if configured. */
+static void handleAddUserGet() {
+  String admin = server.arg("a");
+  String err;
+  if (!usersRequireAdmin(admin, err)) {
+    server.send(403, "application/json", "{\"error\":\"forbidden\"}");
+    return;
+  }
+  String json;
+  usersBuildJsonList(json);
+  server.send(200, "application/json", json);
+}
+
+/** POST /adduser — create user. Form/query: m, v/villa, k/secret, a= */
+static void handleAddUserPost() {
   String villa = argPrefer("villa", "v");
   String mobile = argPrefer("mobile", "m");
   String secret = argPrefer("secret", "k");
@@ -230,14 +244,73 @@ static void handleAddUser() {
     return;
   }
 
-  server.send(200, "text/html", buildResponse("User added", "green", "✔️", villa, "Mobile: " + mobile));
+  server.send(200, "text/html", buildResponse("User added", "green", GATE_ICON_OK, villa, "Mobile: " + mobile));
+}
+
+/**
+ * PUT /adduser — update existing user.
+ * m/mobile required. k/secret and v/villa optional (omit to keep current).
+ * reset_device=1 (or true/yes) clears device binding for next /open.
+ */
+static void handleAddUserPut() {
+  String villa = argPrefer("villa", "v");
+  String mobile = argPrefer("mobile", "m");
+  String secret = argPrefer("secret", "k");
+  String admin = server.arg("a");
+  String reset = server.arg("reset_device");
+  const bool resetDev =
+      (reset == "1" || reset == "true" || reset.equalsIgnoreCase("yes"));
+
+  String err;
+  if (!usersUpdate(mobile, secret, villa, resetDev, admin, err)) {
+    server.send(400, "text/html", buildResponse("Update failed", "red", "❌", villa.length() ? villa : "-", err));
+    return;
+  }
+
+  server.send(200, "text/html", buildResponse("User updated", "green", GATE_ICON_OK, mobile, ""));
+}
+
+/** POST /adduser/bulk — form: a=, csv= (mobile,secret,villa[,deviceId] per line). Max MAX_CSV_IMPORT_BYTES. */
+static void handleAddUserBulk() {
+  if (server.method() != HTTP_POST) {
+    server.send(405, "text/plain", "Use POST");
+    return;
+  }
+  String admin = server.arg("a");
+  String csv = server.arg("csv");
+  String summary;
+  String err;
+  if (!usersImportCsv(csv, admin, summary, err)) {
+    server.send(400, "text/plain", err + "\n" + summary);
+    return;
+  }
+  server.send(200, "text/plain", summary);
+}
+
+static void handleAddUserRequest() {
+  switch (server.method()) {
+    case HTTP_GET:
+      handleAddUserGet();
+      break;
+    case HTTP_POST:
+      handleAddUserPost();
+      break;
+    case HTTP_PUT:
+      handleAddUserPut();
+      break;
+    default:
+      server.send(405, "text/plain", "Method Not Allowed");
+      break;
+  }
 }
 
 void registerWebRoutes() {
   server.on("/open", handleOpen);
   server.on("/logs", handleLogs);
-  server.on("/adduser", handleAddUser);
-  server.on("/adduer", handleAddUser);  // common typo alias
+  server.on("/adduser", handleAddUserRequest);
+  server.on("/adduer", handleAddUserRequest);
+  server.on("/adduser/bulk", handleAddUserBulk);
+  server.on("/adduer/bulk", handleAddUserBulk);
 }
 
 void webServerBegin() {
