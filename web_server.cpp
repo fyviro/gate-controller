@@ -64,49 +64,77 @@ static bool iconLooksLikeImageSrc(const String& icon) {
 }
 
 /**
- * Build HTML card. `icon` is either:
- * - Short label / emoji (shown as styled text), or
- * - Image URL or data URL (e.g. data:image/png;base64,....) for <img src="...">.
- * Do not pass raw binary image bytes as String — only a proper URL or data: URI.
+ * Same layout as your R"rawliteral(...)" template; dynamic parts spliced in.
+ * title/villa/message/color escaped for HTML; image URLs use <img>.
  */
 static String buildResponse(const String& title, const String& color, const String& icon, const String& villa,
-                            const String& msg) {
-  String iconBlock;
+                            const String& message, bool isSuccess) {
+  String bg = isSuccess ? "#f0f8f0" : "#fff5f5";
+
+  String iconInner;
   if (iconLooksLikeImageSrc(icon)) {
-    iconBlock = "<img class=\"icon-img\" alt=\"\" src=\"";
-    iconBlock += htmlEscape(icon);
-    iconBlock += "\">";
+    iconInner = "<img class=\"icon-img\" alt=\"\" src=\"";
+    iconInner += htmlEscape(icon);
+    iconInner += "\" style=\"max-width:80px;max-height:80px;object-fit:contain;vertical-align:middle;\">";
   } else {
-    iconBlock = "<span class=\"icon-emoji\" style=\"color:";
-    iconBlock += htmlEscape(color);
-    iconBlock += ";\">";
-    iconBlock += htmlEscape(icon);
-    iconBlock += "</span>";
+    iconInner = htmlEscape(icon);
   }
 
-  String html;
-  html.reserve(400 + title.length() + villa.length() + msg.length() + icon.length());
-  html += "<!DOCTYPE html><html><head><meta charset=\"UTF-8\">";
-  html += "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">";
-  html += "<style>";
-  html += "body{display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;";
-  html += "font-family:Arial,sans-serif;text-align:center;background:#f5f5f5;}";
-  html += ".card{padding:30px;border-radius:12px;background:#fff;box-shadow:0 4px 10px rgba(0,0,0,0.1);";
-  html += "max-width:92%;}";
-  html += ".icon-emoji{font-size:60px;line-height:1.2;display:block;margin-bottom:8px;}";
-  html += ".icon-img{display:block;margin:8px auto;max-width:96px;max-height:96px;object-fit:contain;}";
-  html += "</style></head><body><div class=\"card\">";
-  html += iconBlock;
-  html += "<h2 style=\"color:";
-  html += htmlEscape(color);
-  html += ";\">";
-  html += htmlEscape(title);
-  html += "</h2><h3>Villa: ";
-  html += htmlEscape(villa);
-  html += "</h3><p>";
-  html += htmlEscape(msg);
-  html += "</p></div></body></html>";
-  return html;
+  const String titleHtml = htmlEscape(title);
+  const String villaHtml = htmlEscape(villa);
+  const String msgHtml = htmlEscape(message);
+  const String colorHtml = htmlEscape(color);
+
+  return String(R"rawliteral(
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+body {
+  display:flex; justify-content:center; align-items:center;
+  height:100vh; font-family:Arial; text-align:center;
+  background:)rawliteral") +
+         bg +
+         R"rawliteral(;
+}
+.card {
+  padding:30px; border-radius:12px;
+  background:white; box-shadow:0 4px 10px rgba(0,0,0,0.1);
+}
+.icon {
+  font-size:80px; color:)rawliteral" +
+         colorHtml +
+         R"rawliteral(;
+}
+</style>
+</head>
+<body>
+
+<div class="card">
+  <div class="icon">)rawliteral" +
+         iconInner +
+         R"rawliteral(</div>
+  <h2 style="color:)rawliteral" +
+         colorHtml +
+         R"rawliteral(;">)rawliteral" +
+         titleHtml +
+         R"rawliteral(</h2>
+  <h3>Villa: )rawliteral" +
+         villaHtml +
+         R"rawliteral(</h3>
+  <p>)rawliteral" +
+         msgHtml +
+         R"rawliteral(</p>
+</div>
+<script>
+setTimeout(function () { window.close(); }, 3000);
+</script>
+
+</body>
+</html>
+)rawliteral";
 }
 
 /** Prefer long name, fall back to short query key (e.g. villa / v). */
@@ -144,18 +172,19 @@ static void handleOpen() {
 
   // Villa comes only from registration (lookup by mobile), not from the QR URL.
   if (mobile == "" || ts == "" || sig == "") {
-    server.send(403, "text/html", buildResponse("Access Denied", "red", "❌", "-", "Missing m, t, or s"));
+    server.send(403, "text/html",
+                  buildResponse("Access Denied", "red", "❌", "-", "Missing m, t, or s", false));
     return;
   }
 
   if (!getUser(mobile, key, villa, udeviceId)) {
-    server.send(403, "text/html", buildResponse("Access Denied", "red", "❌", "-", "Unknown mobile"));
+    server.send(403, "text/html", buildResponse("Access Denied", "red", "❌", "-", "Unknown mobile", false));
     addLog("-", mobile, "Denied");
     return;
   }
 
   if (!isPlausibleUnixTs(ts)) {
-    server.send(403, "text/html", buildResponse("Access Denied", "red", "❌", villa, "Invalid timestamp"));
+    server.send(403, "text/html", buildResponse("Access Denied", "red", "❌", villa, "Invalid timestamp", false));
     addLog(villa, mobile, "Denied");
     return;
   }
@@ -165,30 +194,38 @@ static void handleOpen() {
 
   // Firmware uses uppercase hex; JS often emits lowercase — accept both.
   if (!expected.equalsIgnoreCase(sig)) {
-    server.send(403, "text/html", buildResponse("Access Denied", "red", "❌", villa, "Invalid signature"));
+    server.send(403, "text/html", buildResponse("Access Denied", "red", "❌", villa, "Invalid signature", false));
     addLog(villa, mobile, "Denied");
     return;
   }
-
+ 
   long tokenTime = ts.toInt();
-  long currentTime = rtc.now().unixtime();
+  // If RTC is not initialized (year < 2022), sync it
+  DateTime now = rtc.now();
+  if (now.year() < 2022) {
+    Serial.println("RTC not set. Syncing from QR...");
 
+    rtc.adjust(DateTime(tokenTime - 19800)); // convert IST → UTC
+  }
+  long currentTime = rtc.now().unixtime() + 19800;
   if (labs(currentTime - tokenTime) > QR_VALID_WINDOW_SEC) {
-    server.send(403, "text/html", buildResponse("Access Denied", "red", "❌", villa, "QR Expired"));
+    server.send(403, "text/html",
+      buildResponse("Access Denied", "red", "❌", villa, "QR Expired", false)
+    );
     addLog(villa, mobile, "Denied");
     return;
   }
 
   String bindErr;
   if (!usersEnsureDeviceBinding(mobile, deviceId, bindErr)) {
-    server.send(403, "text/html", buildResponse("Access Denied", "red", "❌", villa, bindErr));
+    server.send(403, "text/html", buildResponse("Access Denied", "red", "❌", villa, bindErr, false));
     addLog(villa, mobile, "Denied");
     return;
   }
 
   triggerRelay();
 
-  server.send(200, "text/html", buildResponse("Access Granted", "green", GATE_ICON_OK, villa, ""));
+  server.send(200, "text/html", buildResponse("Access Granted", "green", GATE_ICON_OK, villa, "", true));
   addLog(villa, mobile, "GRANTED");
 }
 
@@ -240,11 +277,11 @@ static void handleAddUserPost() {
 
   String err;
   if (!usersAdd(mobile, secret, villa, deviceId, admin, err)) {
-    server.send(400, "text/html", buildResponse("Add user failed", "red", "❌", villa, err));
+    server.send(400, "text/html", buildResponse("Add user failed", "red", "❌", villa, err, false));
     return;
   }
 
-  server.send(200, "text/html", buildResponse("User added", "green", GATE_ICON_OK, villa, "Mobile: " + mobile));
+  server.send(200, "text/html", buildResponse("User added", "green", GATE_ICON_OK, villa, "Mobile: " + mobile, true));
 }
 
 /**
@@ -263,11 +300,12 @@ static void handleAddUserPut() {
 
   String err;
   if (!usersUpdate(mobile, secret, villa, resetDev, admin, err)) {
-    server.send(400, "text/html", buildResponse("Update failed", "red", "❌", villa.length() ? villa : "-", err));
+    server.send(400, "text/html",
+                  buildResponse("Update failed", "red", "❌", villa.length() ? villa : "-", err, false));
     return;
   }
 
-  server.send(200, "text/html", buildResponse("User updated", "green", GATE_ICON_OK, mobile, ""));
+  server.send(200, "text/html", buildResponse("User updated", "green", GATE_ICON_OK, mobile, "", true));
 }
 
 /** POST /adduser/bulk — form: a=, csv= (mobile,secret,villa[,deviceId] per line). Max MAX_CSV_IMPORT_BYTES. */
