@@ -3,7 +3,11 @@
 
 #include <Arduino.h>
 
-/** Seed built-in users; call once from setup() before serving HTTP. */
+/**
+ * Load users from NVS (flash), or install factory seed on first/empty flash.
+ * After a successful POST /adduser (or bulk/update), data is written to NVS and survives
+ * power-off and reboot as long as flash is not erased (e.g. avoid "Erase all flash" when uploading).
+ */
 void usersInit();
 
 /** True if admin token is acceptable for /adduser APIs (see ADDUSER_ADMIN_KEY in config.h). */

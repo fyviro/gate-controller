@@ -8,4 +8,11 @@ extern WebServer server;
 void registerWebRoutes();
 void webServerBegin();
 
+extern String usedSigs[20];   // store last 20 used QR
+extern int sigIndex;
+
+extern long baseTS;
+extern long baseMillis;
+
+
 #endif

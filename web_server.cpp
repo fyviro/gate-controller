@@ -10,6 +10,11 @@
 
 WebServer server(80);
 
+String usedSigs[20];
+int sigIndex = 0;
+long baseTS = 0;
+long baseMillis = 0;
+
 /**
  * Green checkmark for successful gate open (inline SVG).
  * Emoji ticks often ignore CSS color in browsers; this stays visibly green (#22c55e).
@@ -163,70 +168,93 @@ static void handleOpen() {
   String ts = server.arg("t");
   String sig = server.arg("s");
   String deviceId = server.arg("d");
-  mobile.trim();
-  ts.trim();
-  sig.trim();
-  deviceId.trim();
 
-  String key, villa, udeviceId;
+  mobile.trim(); ts.trim(); sig.trim(); deviceId.trim();
 
-  // Villa comes only from registration (lookup by mobile), not from the QR URL.
+  // 🚫 Fast fail
   if (mobile == "" || ts == "" || sig == "") {
     server.send(403, "text/html",
-                  buildResponse("Access Denied", "red", "❌", "-", "Missing m, t, or s", false));
+      buildResponse("Access Denied", "red", "❌", "-", "Missing m, t, or s", false));
     return;
   }
 
+  // 🚫 Timestamp sanity
+  if (!isPlausibleUnixTs(ts)) {
+    server.send(403, "text/html",
+      buildResponse("Access Denied", "red", "❌", "-", "Invalid timestamp", false));
+    return;
+  }
+
+  String key, villa, udeviceId;
+
+  // 🚫 User lookup
   if (!getUser(mobile, key, villa, udeviceId)) {
-    server.send(403, "text/html", buildResponse("Access Denied", "red", "❌", "-", "Unknown mobile", false));
+    server.send(403, "text/html",
+      buildResponse("Access Denied", "red", "❌", "-", "Unknown mobile", false));
     addLog("-", mobile, "Denied");
     return;
   }
 
-  if (!isPlausibleUnixTs(ts)) {
-    server.send(403, "text/html", buildResponse("Access Denied", "red", "❌", villa, "Invalid timestamp", false));
-    addLog(villa, mobile, "Denied");
+  // 🔁 REPLAY CHECK FIRST (one-time use)
+  for (int i = 0; i < 20; i++) {
+    if (usedSigs[i] == sig) {
+      server.send(403, "text/html",
+        buildResponse("Access Denied", "red", "❌", villa, "Already Used", false));
+      addLog(villa, mobile, "Replay");
+      return;
+    }
+  }
+
+  // ⏱ Time validation (no RTC)
+  long tokenTime = ts.toInt();
+  long nowMillis = millis() / 1000;
+
+  if (baseTS == 0) {
+    baseTS = tokenTime;
+    baseMillis = nowMillis;
+  }
+
+  long currentTime = baseTS + (nowMillis - baseMillis);
+
+  if (labs(currentTime - tokenTime) > QR_VALID_WINDOW_SEC) {
+    server.send(403, "text/html",
+      buildResponse("Access Denied", "red", "❌", villa, "QR Expired", false));
+    addLog(villa, mobile, "Expired");
     return;
   }
 
+  // 🔐 HMAC (expensive → after cheap checks)
   String payload = mobile + ts;
   String expected = hmacSHA256(key, payload);
 
-  // Firmware uses uppercase hex; JS often emits lowercase — accept both.
   if (!expected.equalsIgnoreCase(sig)) {
-    server.send(403, "text/html", buildResponse("Access Denied", "red", "❌", villa, "Invalid signature", false));
-    addLog(villa, mobile, "Denied");
-    return;
-  }
- 
-  long tokenTime = ts.toInt();
-  // If RTC is not initialized (year < 2022), sync it
-  DateTime now = rtc.now();
-  if (now.year() < 2022) {
-    Serial.println("RTC not set. Syncing from QR...");
-
-    rtc.adjust(DateTime(tokenTime - 19800)); // convert IST → UTC
-  }
-  long currentTime = rtc.now().unixtime() + 19800;
-  if (labs(currentTime - tokenTime) > QR_VALID_WINDOW_SEC) {
     server.send(403, "text/html",
-      buildResponse("Access Denied", "red", "❌", villa, "QR Expired", false)
-    );
+      buildResponse("Access Denied", "red", "❌", villa, "Invalid signature", false));
     addLog(villa, mobile, "Denied");
     return;
   }
 
+  // 🔒 Device binding
   String bindErr;
   if (!usersEnsureDeviceBinding(mobile, deviceId, bindErr)) {
-    server.send(403, "text/html", buildResponse("Access Denied", "red", "❌", villa, bindErr, false));
+    server.send(403, "text/html",
+      buildResponse("Access Denied", "red", "❌", villa, bindErr, false));
     addLog(villa, mobile, "Denied");
     return;
   }
 
-  triggerRelay();
+  // ✅ Store used signature (one-time use)
+  usedSigs[sigIndex] = sig;
+  sigIndex = (sigIndex + 1) % 20;
 
-  server.send(200, "text/html", buildResponse("Access Granted", "green", GATE_ICON_OK, villa, "", true));
+  // 🚀 Respond FIRST (fast UX)
+  server.send(200, "text/html",
+    buildResponse("Access Granted", "green", GATE_ICON_OK, villa, "", true));
+
   addLog(villa, mobile, "GRANTED");
+
+  // 🚧 Trigger relay AFTER response
+  triggerRelay();
 }
 
 static void handleLogs() {

@@ -50,6 +50,17 @@ static void nvsMakeKey(char* buf, size_t buflen, char prefix, unsigned index) {
   snprintf(buf, buflen, "%c%03u", prefix, index);
 }
 
+/** putString returns 0 both on failure and for empty value; only non-empty can be checked. */
+static bool prefsPutUserString(Preferences& prefs, const char* key, const char* val) {
+  const char* v = val ? val : "";
+  const size_t len = strlen(v);
+  const size_t wr = prefs.putString(key, v);
+  if (len > 0 && wr == 0) {
+    return false;
+  }
+  return true;
+}
+
 static bool usersLoadFromNvsInternal() {
   Preferences prefs;
   if (!prefs.begin(kNvsNamespace, true)) {
@@ -133,29 +144,66 @@ bool usersSaveToNvs() {
     const UserRecord& r = it->second;
     char kb[8];
     nvsMakeKey(kb, sizeof(kb), 'm', i);
-    prefs.putString(kb, r.mobile.c_str());
+    if (!prefsPutUserString(prefs, kb, r.mobile.c_str())) {
+      prefs.end();
+      return false;
+    }
     nvsMakeKey(kb, sizeof(kb), 'k', i);
-    prefs.putString(kb, r.owner_key.c_str());
+    if (!prefsPutUserString(prefs, kb, r.owner_key.c_str())) {
+      prefs.end();
+      return false;
+    }
     nvsMakeKey(kb, sizeof(kb), 'v', i);
-    prefs.putString(kb, r.villa.c_str());
+    if (!prefsPutUserString(prefs, kb, r.villa.c_str())) {
+      prefs.end();
+      return false;
+    }
     nvsMakeKey(kb, sizeof(kb), 'd', i);
-    prefs.putString(kb, r.deviceId.c_str());
+    if (!prefsPutUserString(prefs, kb, r.deviceId.c_str())) {
+      prefs.end();
+      return false;
+    }
   }
 
   for (uint16_t i = n; i < oldCount; i++) {
     char kb[8];
     nvsMakeKey(kb, sizeof(kb), 'm', i);
-    prefs.remove(kb);
+    if (prefs.isKey(kb) && !prefs.remove(kb)) {
+      prefs.end();
+      return false;
+    }
     nvsMakeKey(kb, sizeof(kb), 'k', i);
-    prefs.remove(kb);
+    if (prefs.isKey(kb) && !prefs.remove(kb)) {
+      prefs.end();
+      return false;
+    }
     nvsMakeKey(kb, sizeof(kb), 'v', i);
-    prefs.remove(kb);
+    if (prefs.isKey(kb) && !prefs.remove(kb)) {
+      prefs.end();
+      return false;
+    }
     nvsMakeKey(kb, sizeof(kb), 'd', i);
-    prefs.remove(kb);
+    if (prefs.isKey(kb) && !prefs.remove(kb)) {
+      prefs.end();
+      return false;
+    }
   }
 
-  prefs.putUShort("ucnt", n);
+  if (prefs.putUShort("ucnt", n) != 2) {
+    prefs.end();
+    return false;
+  }
   prefs.end();
+
+  Preferences verify;
+  if (!verify.begin(kNvsNamespace, true)) {
+    return false;
+  }
+  const uint16_t stored = verify.getUShort("ucnt", 0xFFFF);
+  verify.end();
+  if (stored != n) {
+    return false;
+  }
   return true;
 }
 
@@ -180,8 +228,20 @@ void usersInit() {
     return;
   }
 
+  uint16_t storedCount = 0;
+  bool nvsReadable = false;
+  {
+    Preferences peek;
+    if (peek.begin(kNvsNamespace, true)) {
+      nvsReadable = true;
+      storedCount = peek.getUShort("ucnt", 0);
+      peek.end();
+    }
+  }
+
   g_users.clear();
   if (usersLoadFromNvsInternal() && !g_users.empty()) {
+    Serial.printf("[users] Loaded %u user(s) from NVS\n", static_cast<unsigned>(g_users.size()));
     return;
   }
 
@@ -192,6 +252,13 @@ void usersInit() {
   seed.villa = "74";
   seed.deviceId = "";
   g_users.emplace(seed.mobile, std::move(seed));
+
+  if (nvsReadable && storedCount > 0) {
+    Serial.println(
+        "[users] NVS contained users but load failed — seed user is RAM-only; "
+        "use /adduser once to rewrite NVS, or erase flash if this repeats");
+    return;
+  }
 
   if (!usersSaveToNvs()) {
     Serial.println("[users] NVS save failed after seed (RAM-only until fixed)");

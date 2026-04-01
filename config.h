@@ -8,7 +8,7 @@
 #define MAX_LOGS 100
 
 /** Signed token validity window (seconds), compared against RTC unix time. */
-#define QR_VALID_WINDOW_SEC 300
+#define QR_VALID_WINDOW_SEC 1800
 
 /**
  * Max distinct mobile numbers per villa (same villa id string). Map key is still mobile.
