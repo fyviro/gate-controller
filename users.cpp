@@ -243,6 +243,47 @@ bool usersRequireAdmin(const String& adminToken, String& errMsg) {
   return true;
 }
 
+// void usersInit() {
+//   if (!g_users.empty()) {
+//     return;
+//   }
+
+//   uint16_t storedCount = 0;
+//   bool nvsReadable = false;
+//   {
+//     Preferences peek;
+//     if (peek.begin(kNvsNamespace, true)) {
+//       nvsReadable = true;
+//       storedCount = peek.getUShort("ucnt", 0);
+//       peek.end();
+//     }
+//   }
+
+//   g_users.clear();
+//   if (usersLoadFromNvsInternal() && !g_users.empty()) {
+//     Serial.printf("[users] Loaded %u user(s) from NVS\n", static_cast<unsigned>(g_users.size()));
+//     return;
+//   }
+
+//   loadDefaultUsersFromHeader();
+//   if (g_users.empty()) {
+//     Serial.println("[users] default_users.h produced no users — check DEFAULT_USERS table");
+//     return;
+//   }
+
+//   if (nvsReadable && storedCount > 0) {
+//     Serial.printf(
+//         "[users] NVS contained users but load failed — %u default user(s) in RAM only; "
+//         "POST /adduser to rewrite NVS, or erase flash if this repeats\n",
+//         static_cast<unsigned>(g_users.size()));
+//     return;
+//   }
+
+//   if (!usersSaveToNvs()) {
+//     Serial.println("[users] NVS save failed after default seed (RAM-only until fixed)");
+//   }
+// }
+
 void usersInit() {
   if (!g_users.empty()) {
     return;
@@ -250,6 +291,8 @@ void usersInit() {
 
   uint16_t storedCount = 0;
   bool nvsReadable = false;
+
+  // 🔍 Peek NVS metadata
   {
     Preferences peek;
     if (peek.begin(kNvsNamespace, true)) {
@@ -259,28 +302,41 @@ void usersInit() {
     }
   }
 
-  g_users.clear();
-  if (usersLoadFromNvsInternal() && !g_users.empty()) {
-    Serial.printf("[users] Loaded %u user(s) from NVS\n", static_cast<unsigned>(g_users.size()));
+  // 🚀 Try loading from NVS (DO NOT clear before this)
+  bool loaded = usersLoadFromNvsInternal();
+
+  // ✅ Success: data loaded
+  if (loaded && !g_users.empty()) {
+    Serial.printf("[users] Loaded %u user(s) from NVS\n",
+                  static_cast<unsigned>(g_users.size()));
     return;
   }
+
+  // ❗ Load failed
+  Serial.println("[users] ERROR: Failed to load users from NVS");
+
+  // 🔴 CRITICAL FIX: Do NOT overwrite if NVS had data
+  if (nvsReadable && storedCount > 0) {
+    Serial.println("[users] NVS has data but load failed — NOT overwriting");
+    return;
+  }
+
+  // ✅ First boot (no data in NVS)
+  Serial.println("[users] First boot — loading default users");
 
   loadDefaultUsersFromHeader();
+
   if (g_users.empty()) {
-    Serial.println("[users] default_users.h produced no users — check DEFAULT_USERS table");
+    Serial.println("[users] default_users.h empty — nothing to seed");
     return;
   }
 
-  if (nvsReadable && storedCount > 0) {
-    Serial.printf(
-        "[users] NVS contained users but load failed — %u default user(s) in RAM only; "
-        "POST /adduser to rewrite NVS, or erase flash if this repeats\n",
-        static_cast<unsigned>(g_users.size()));
-    return;
-  }
-
+  // 💾 Save defaults to NVS
   if (!usersSaveToNvs()) {
-    Serial.println("[users] NVS save failed after default seed (RAM-only until fixed)");
+    Serial.println("[users] NVS save failed after default seed");
+  } else {
+    Serial.printf("[users] Seeded %u users into NVS\n",
+                  static_cast<unsigned>(g_users.size()));
   }
 }
 
