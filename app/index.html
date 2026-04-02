@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Access Gate</title>
+<link rel="manifest" href="manifest.json">
+<script src="https://cdn.jsdelivr.net/npm/qrcode/build/qrcode.min.js"></script>
+<style>
+body { margin:0;font-family:Arial;background:#0f172a;color:#fff;text-align:center;}
+.container {padding:20px;}
+input{width:90%;padding:12px;margin:8px;border-radius:8px;border:none;}
+button{width:90%;padding:14px;margin:8px;border-radius:10px;border:none;font-size:16px;}
+.save{background:#475569;color:#fff;}
+.go{background:#22c55e;color:#fff;}
+.share{background:#2563eb;color:#fff;}
+#qr{margin-top:20px;}
+</style>
+</head>
+<body>
+
+<div class="container">
+<h2>Lakeridge Gate Access</h2>
+<input id="mobile" placeholder="Mobile">
+<input id="secret" placeholder="Access Key">
+<button class="save" onclick="save()">Save</button>
+<button class="go" onclick="generateQR()">Generate QR</button>
+<button class="share" onclick="shareQR()">Share QR</button>
+<canvas id="qr"></canvas>
+</div>
+
+<script>
+let currentCanvas = null;
+
+function getDeviceId() {
+  let id = localStorage.getItem("gateDeviceId");
+  if (!id) {
+    id = (crypto.randomUUID && crypto.randomUUID()) || ("dev-" + Math.random().toString(36).slice(2));
+    localStorage.setItem("gateDeviceId", id);
+  }
+  return id;
+}
+
+async function hmacSHA256(key, data) {
+  const enc = new TextEncoder();
+  const cryptoKey = await crypto.subtle.importKey(
+    "raw", enc.encode(key),
+    { name: "HMAC", hash: "SHA-256" },
+    false, ["sign"]
+  );
+  const signature = await crypto.subtle.sign("HMAC", cryptoKey, enc.encode(data));
+  return Array.from(new Uint8Array(signature))
+    .map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+function save() {
+  const mobile = document.getElementById("mobile").value.trim();
+  const secret = document.getElementById("secret").value.trim();
+
+  if (!mobile || !secret) {
+    alert("Enter mobile and secret");
+    return;
+  }
+
+  localStorage.setItem("mobile", mobile);
+  localStorage.setItem("secret", secret);
+
+  alert("Saved");
+}
+
+async function generateQR() {
+  const mobile = localStorage.getItem("mobile");
+  const secret = localStorage.getItem("secret");
+  if (!mobile || !secret) { alert("Enter details"); return; }
+
+  const ts = Math.floor(Date.now()/1000);
+  const sig = await hmacSHA256(secret, mobile+ts);
+  const deviceId = getDeviceId();
+
+  const url = `http://192.168.4.1/open?m=${mobile}&t=${ts}&d=${deviceId}&s=${sig}`;
+
+  QRCode.toCanvas(document.getElementById("qr"), url, function(err, canvas){
+    if (!err) currentCanvas = canvas;
+  });
+}
+
+function shareQR() {
+  if (!currentCanvas) {
+    alert("Generate QR first");
+    return;
+  }
+
+  currentCanvas.toBlob(function (blob) {
+    const file = new File([blob], "gate_qr.png", { type: "image/png" });
+
+    // ✅ Try file share (best case)
+    if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+      navigator.share({
+        files: [file],
+        title: "Gate QR"
+      }).catch(() => fallbackShare());
+    } else {
+      fallbackShare();
+    }
+
+    // 🔁 Fallback → WhatsApp URL share
+    function fallbackShare() {
+      const text = "Scan this QR at gate";
+      const waUrl = "https://wa.me/?text=" + encodeURIComponent(text);
+
+      window.open(waUrl, "_blank");
+
+      alert("If QR image is not attached, please take screenshot and share.");
+    }
+  });
+}
+
+if ('serviceWorker' in navigator) {
+ navigator.serviceWorker.register('sw.js');
+}
+</script>
+
+</body>
+</html>

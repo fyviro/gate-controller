@@ -3,7 +3,7 @@
 
 #include "RTClib.h"
 
-/** Single RTC instance; defined in gate_controller.ino */
+/** Single RTC instance; defined in gate-controller.ino */
 extern RTC_DS3231 rtc;
 
 #endif

@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "config.h"
+#include "default_users.h"
 
 /**
  * User directory: keyed by mobile (std::string) for O(1) lookup.
@@ -45,6 +46,25 @@ static size_t countResidentsForVillaIn(const std::unordered_map<std::string, Use
 }
 
 static size_t countResidentsForVilla(const std::string& villa) { return countResidentsForVillaIn(g_users, villa); }
+
+/** Fill g_users from default_users.h (replaces any existing entries). */
+static void loadDefaultUsersFromHeader() {
+  g_users.clear();
+  for (size_t i = 0; i < DEFAULT_USER_COUNT; i++) {
+    const DefaultUserSeed& s = DEFAULT_USERS[i];
+    UserRecord rec;
+    rec.mobile = s.mobile ? s.mobile : "";
+    rec.owner_key = s.key ? s.key : "";
+    rec.villa = s.villa ? s.villa : "";
+    rec.deviceId = "";
+    if (rec.mobile.empty() || rec.owner_key.empty() || rec.villa.empty()) {
+      continue;
+    }
+    if (!g_users.emplace(rec.mobile, std::move(rec)).second) {
+      Serial.printf("[users] duplicate mobile in default_users.h skipped: %s\n", s.mobile ? s.mobile : "?");
+    }
+  }
+}
 
 static void nvsMakeKey(char* buf, size_t buflen, char prefix, unsigned index) {
   snprintf(buf, buflen, "%c%03u", prefix, index);
@@ -245,23 +265,22 @@ void usersInit() {
     return;
   }
 
-  g_users.clear();
-  UserRecord seed;
-  seed.mobile = "9908195316";
-  seed.owner_key = "a1b2c3d4e5f6";
-  seed.villa = "74";
-  seed.deviceId = "";
-  g_users.emplace(seed.mobile, std::move(seed));
+  loadDefaultUsersFromHeader();
+  if (g_users.empty()) {
+    Serial.println("[users] default_users.h produced no users — check DEFAULT_USERS table");
+    return;
+  }
 
   if (nvsReadable && storedCount > 0) {
-    Serial.println(
-        "[users] NVS contained users but load failed — seed user is RAM-only; "
-        "use /adduser once to rewrite NVS, or erase flash if this repeats");
+    Serial.printf(
+        "[users] NVS contained users but load failed — %u default user(s) in RAM only; "
+        "POST /adduser to rewrite NVS, or erase flash if this repeats\n",
+        static_cast<unsigned>(g_users.size()));
     return;
   }
 
   if (!usersSaveToNvs()) {
-    Serial.println("[users] NVS save failed after seed (RAM-only until fixed)");
+    Serial.println("[users] NVS save failed after default seed (RAM-only until fixed)");
   }
 }
 
