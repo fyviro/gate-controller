@@ -66,30 +66,128 @@ static void loadDefaultUsersFromHeader() {
   }
 }
 
+/** One blob key — many per-user string keys exhaust NVS entry limits (~55 users × 4 ≈ 220 commits/keys). */
+static const char kNvsUsersBlobKey[] = "users";
+static const uint16_t kUserBlobMagic = 0x5547;
+static const uint16_t kUserBlobVer = 1;
+
 static void nvsMakeKey(char* buf, size_t buflen, char prefix, unsigned index) {
   snprintf(buf, buflen, "%c%03u", prefix, index);
 }
 
-/** putString returns 0 both on failure and for empty value; only non-empty can be checked. */
-static bool prefsPutUserString(Preferences& prefs, const char* key, const char* val) {
-  const char* v = val ? val : "";
-  const size_t len = strlen(v);
-  const size_t wr = prefs.putString(key, v);
-  if (len > 0 && wr == 0) {
+static bool blobPull8(const uint8_t*& p, const uint8_t* end, uint8_t& out) {
+  if (p >= end) {
     return false;
+  }
+  out = *p++;
+  return true;
+}
+
+static bool blobPull16(const uint8_t*& p, const uint8_t* end, uint16_t& out) {
+  if (p + 2 > end) {
+    return false;
+  }
+  out = static_cast<uint16_t>(p[0] | (static_cast<uint16_t>(p[1]) << 8));
+  p += 2;
+  return true;
+}
+
+static bool blobPullStr(const uint8_t*& p, const uint8_t* end, std::string& s, size_t maxLen) {
+  uint8_t len = 0;
+  if (!blobPull8(p, end, len)) {
+    return false;
+  }
+  if (len > maxLen || p + len > end) {
+    return false;
+  }
+  s.assign(reinterpret_cast<const char*>(p), len);
+  p += len;
+  return true;
+}
+
+static bool appendUserToBlob(std::vector<uint8_t>& b, const UserRecord& r) {
+  if (r.mobile.size() > MAX_MOBILE_LEN || r.owner_key.size() > MAX_SECRET_LEN || r.villa.size() > MAX_VILLA_LEN ||
+      r.deviceId.size() > MAX_DEVICE_LEN) {
+    return false;
+  }
+  b.push_back(static_cast<uint8_t>(r.mobile.size()));
+  b.insert(b.end(), r.mobile.begin(), r.mobile.end());
+  b.push_back(static_cast<uint8_t>(r.owner_key.size()));
+  b.insert(b.end(), r.owner_key.begin(), r.owner_key.end());
+  b.push_back(static_cast<uint8_t>(r.villa.size()));
+  b.insert(b.end(), r.villa.begin(), r.villa.end());
+  b.push_back(static_cast<uint8_t>(r.deviceId.size()));
+  b.insert(b.end(), r.deviceId.begin(), r.deviceId.end());
+  return true;
+}
+
+static bool usersSerializeToBlob(std::vector<uint8_t>& out) {
+  out.clear();
+  out.reserve(g_users.size() * 48 + 16);
+  out.push_back(static_cast<uint8_t>(kUserBlobMagic & 0xFF));
+  out.push_back(static_cast<uint8_t>(kUserBlobMagic >> 8));
+  out.push_back(static_cast<uint8_t>(kUserBlobVer & 0xFF));
+  out.push_back(static_cast<uint8_t>(kUserBlobVer >> 8));
+  if (g_users.size() > MAX_USERS) {
+    return false;
+  }
+  const uint16_t n = static_cast<uint16_t>(g_users.size());
+  out.push_back(static_cast<uint8_t>(n & 0xFF));
+  out.push_back(static_cast<uint8_t>(n >> 8));
+  std::vector<std::string> sorted;
+  sorted.reserve(g_users.size());
+  for (const auto& kv : g_users) {
+    sorted.push_back(kv.first);
+  }
+  std::sort(sorted.begin(), sorted.end());
+  for (const auto& mkey : sorted) {
+    const UserRecord& r = g_users.at(mkey);
+    if (!appendUserToBlob(out, r)) {
+      return false;
+    }
   }
   return true;
 }
 
-static bool usersLoadFromNvsInternal() {
-  Preferences prefs;
-  if (!prefs.begin(kNvsNamespace, true)) {
+static bool usersParseBlobIntoMap(const uint8_t* data, size_t len, std::unordered_map<std::string, UserRecord>& loaded) {
+  const uint8_t* p = data;
+  const uint8_t* end = data + len;
+  uint16_t magic = 0;
+  uint16_t ver = 0;
+  uint16_t count = 0;
+  if (!blobPull16(p, end, magic) || !blobPull16(p, end, ver)) {
     return false;
   }
+  if (magic != kUserBlobMagic || ver != kUserBlobVer) {
+    return false;
+  }
+  if (!blobPull16(p, end, count)) {
+    return false;
+  }
+  if (count > MAX_USERS) {
+    return false;
+  }
+  loaded.clear();
+  loaded.reserve(count);
+  for (uint16_t i = 0; i < count; i++) {
+    UserRecord rec;
+    if (!blobPullStr(p, end, rec.mobile, MAX_MOBILE_LEN) || !blobPullStr(p, end, rec.owner_key, MAX_SECRET_LEN) ||
+        !blobPullStr(p, end, rec.villa, MAX_VILLA_LEN) || !blobPullStr(p, end, rec.deviceId, MAX_DEVICE_LEN)) {
+      return false;
+    }
+    if (rec.mobile.empty() || rec.owner_key.empty() || rec.villa.empty()) {
+      return false;
+    }
+    if (!loaded.emplace(rec.mobile, std::move(rec)).second) {
+      return false;
+    }
+  }
+  return p == end && loaded.size() == count;
+}
 
+static bool usersLoadLegacyNvs(Preferences& prefs) {
   uint16_t n = prefs.getUShort("ucnt", 0);
   if (n == 0 || n > MAX_USERS) {
-    prefs.end();
     return false;
   }
 
@@ -108,12 +206,10 @@ static bool usersLoadFromNvsInternal() {
     String ds = prefs.getString(kb, "");
 
     if (ms.length() == 0 || ks.length() == 0 || vs.length() == 0) {
-      prefs.end();
       return false;
     }
     if (ms.length() > MAX_MOBILE_LEN || ks.length() > MAX_SECRET_LEN || vs.length() > MAX_VILLA_LEN ||
         ds.length() > MAX_DEVICE_LEN) {
-      prefs.end();
       return false;
     }
 
@@ -124,92 +220,61 @@ static bool usersLoadFromNvsInternal() {
     rec.deviceId = toStd(ds);
 
     if (!loaded.emplace(rec.mobile, std::move(rec)).second) {
-      prefs.end();
       return false;
     }
   }
 
-  prefs.end();
+  if (loaded.size() != n) {
+    return false;
+  }
   g_users.swap(loaded);
-  return g_users.size() == n;
+  return true;
+}
+
+static bool usersLoadFromNvsInternal() {
+  Preferences prefs;
+  if (!prefs.begin(kNvsNamespace, true)) {
+    return false;
+  }
+
+  const size_t blobLen = prefs.getBytesLength(kNvsUsersBlobKey);
+  if (blobLen > 0) {
+    std::vector<uint8_t> buf(blobLen);
+    if (prefs.getBytes(kNvsUsersBlobKey, buf.data(), blobLen) != blobLen) {
+      prefs.end();
+      return false;
+    }
+    prefs.end();
+    std::unordered_map<std::string, UserRecord> loaded;
+    if (!usersParseBlobIntoMap(buf.data(), buf.size(), loaded)) {
+      return false;
+    }
+    g_users.swap(loaded);
+    return true;
+  }
+
+  const bool ok = usersLoadLegacyNvs(prefs);
+  prefs.end();
+  return ok;
 }
 
 bool usersSaveToNvs() {
+  std::vector<uint8_t> blob;
+  if (!usersSerializeToBlob(blob)) {
+    return false;
+  }
+
   Preferences prefs;
   if (!prefs.begin(kNvsNamespace, false)) {
     return false;
   }
 
-  const uint16_t oldCount = prefs.getUShort("ucnt", 0);
-
-  std::vector<std::string> sorted;
-  sorted.reserve(g_users.size());
-  for (const auto& kv : g_users) {
-    sorted.push_back(kv.first);
-  }
-  std::sort(sorted.begin(), sorted.end());
-
-  const uint16_t n = static_cast<uint16_t>(sorted.size());
-  if (n > MAX_USERS) {
+  if (!prefs.clear()) {
     prefs.end();
     return false;
   }
 
-  for (uint16_t i = 0; i < n; i++) {
-    const auto it = g_users.find(sorted[i]);
-    if (it == g_users.end()) {
-      prefs.end();
-      return false;
-    }
-    const UserRecord& r = it->second;
-    char kb[8];
-    nvsMakeKey(kb, sizeof(kb), 'm', i);
-    if (!prefsPutUserString(prefs, kb, r.mobile.c_str())) {
-      prefs.end();
-      return false;
-    }
-    nvsMakeKey(kb, sizeof(kb), 'k', i);
-    if (!prefsPutUserString(prefs, kb, r.owner_key.c_str())) {
-      prefs.end();
-      return false;
-    }
-    nvsMakeKey(kb, sizeof(kb), 'v', i);
-    if (!prefsPutUserString(prefs, kb, r.villa.c_str())) {
-      prefs.end();
-      return false;
-    }
-    nvsMakeKey(kb, sizeof(kb), 'd', i);
-    if (!prefsPutUserString(prefs, kb, r.deviceId.c_str())) {
-      prefs.end();
-      return false;
-    }
-  }
-
-  for (uint16_t i = n; i < oldCount; i++) {
-    char kb[8];
-    nvsMakeKey(kb, sizeof(kb), 'm', i);
-    if (prefs.isKey(kb) && !prefs.remove(kb)) {
-      prefs.end();
-      return false;
-    }
-    nvsMakeKey(kb, sizeof(kb), 'k', i);
-    if (prefs.isKey(kb) && !prefs.remove(kb)) {
-      prefs.end();
-      return false;
-    }
-    nvsMakeKey(kb, sizeof(kb), 'v', i);
-    if (prefs.isKey(kb) && !prefs.remove(kb)) {
-      prefs.end();
-      return false;
-    }
-    nvsMakeKey(kb, sizeof(kb), 'd', i);
-    if (prefs.isKey(kb) && !prefs.remove(kb)) {
-      prefs.end();
-      return false;
-    }
-  }
-
-  if (prefs.putUShort("ucnt", n) != 2) {
+  if (prefs.putBytes(kNvsUsersBlobKey, blob.data(), blob.size()) != blob.size()) {
     prefs.end();
     return false;
   }
@@ -219,12 +284,9 @@ bool usersSaveToNvs() {
   if (!verify.begin(kNvsNamespace, true)) {
     return false;
   }
-  const uint16_t stored = verify.getUShort("ucnt", 0xFFFF);
+  const size_t got = verify.getBytesLength(kNvsUsersBlobKey);
   verify.end();
-  if (stored != n) {
-    return false;
-  }
-  return true;
+  return got == blob.size();
 }
 
 static bool adminTokenOk(const String& adminToken) {
@@ -243,100 +305,49 @@ bool usersRequireAdmin(const String& adminToken, String& errMsg) {
   return true;
 }
 
-// void usersInit() {
-//   if (!g_users.empty()) {
-//     return;
-//   }
-
-//   uint16_t storedCount = 0;
-//   bool nvsReadable = false;
-//   {
-//     Preferences peek;
-//     if (peek.begin(kNvsNamespace, true)) {
-//       nvsReadable = true;
-//       storedCount = peek.getUShort("ucnt", 0);
-//       peek.end();
-//     }
-//   }
-
-//   g_users.clear();
-//   if (usersLoadFromNvsInternal() && !g_users.empty()) {
-//     Serial.printf("[users] Loaded %u user(s) from NVS\n", static_cast<unsigned>(g_users.size()));
-//     return;
-//   }
-
-//   loadDefaultUsersFromHeader();
-//   if (g_users.empty()) {
-//     Serial.println("[users] default_users.h produced no users — check DEFAULT_USERS table");
-//     return;
-//   }
-
-//   if (nvsReadable && storedCount > 0) {
-//     Serial.printf(
-//         "[users] NVS contained users but load failed — %u default user(s) in RAM only; "
-//         "POST /adduser to rewrite NVS, or erase flash if this repeats\n",
-//         static_cast<unsigned>(g_users.size()));
-//     return;
-//   }
-
-//   if (!usersSaveToNvs()) {
-//     Serial.println("[users] NVS save failed after default seed (RAM-only until fixed)");
-//   }
-// }
-
 void usersInit() {
   if (!g_users.empty()) {
     return;
   }
 
-  uint16_t storedCount = 0;
+  uint16_t legacyCount = 0;
   bool nvsReadable = false;
-
-  // 🔍 Peek NVS metadata
+  bool hasBlob = false;
   {
     Preferences peek;
     if (peek.begin(kNvsNamespace, true)) {
       nvsReadable = true;
-      storedCount = peek.getUShort("ucnt", 0);
+      legacyCount = peek.getUShort("ucnt", 0);
+      hasBlob = peek.getBytesLength(kNvsUsersBlobKey) > 0;
       peek.end();
     }
   }
 
-  // 🚀 Try loading from NVS (DO NOT clear before this)
-  bool loaded = usersLoadFromNvsInternal();
-
-  // ✅ Success: data loaded
-  if (loaded && !g_users.empty()) {
-    Serial.printf("[users] Loaded %u user(s) from NVS\n",
-                  static_cast<unsigned>(g_users.size()));
+  g_users.clear();
+  if (usersLoadFromNvsInternal() && !g_users.empty()) {
+    Serial.printf("[users] Loaded %u user(s) from NVS\n", static_cast<unsigned>(g_users.size()));
     return;
   }
 
-  // ❗ Load failed
-  Serial.println("[users] ERROR: Failed to load users from NVS");
-
-  // 🔴 CRITICAL FIX: Do NOT overwrite if NVS had data
-  if (nvsReadable && storedCount > 0) {
-    Serial.println("[users] NVS has data but load failed — NOT overwriting");
-    return;
-  }
-
-  // ✅ First boot (no data in NVS)
-  Serial.println("[users] First boot — loading default users");
-
+  g_users.clear();
   loadDefaultUsersFromHeader();
-
   if (g_users.empty()) {
-    Serial.println("[users] default_users.h empty — nothing to seed");
+    Serial.println("[users] default_users.h produced no users");
     return;
   }
 
-  // 💾 Save defaults to NVS
+  if (nvsReadable && (legacyCount > 0 || hasBlob)) {
+    Serial.printf(
+        "[users] NVS had user data but load failed — %u default user(s) in RAM only; "
+        "POST /adduser or bulk import to rewrite NVS\n",
+        static_cast<unsigned>(g_users.size()));
+    return;
+  }
+
   if (!usersSaveToNvs()) {
-    Serial.println("[users] NVS save failed after default seed");
+    Serial.println("[users] NVS save failed after default seed (RAM-only until fixed)");
   } else {
-    Serial.printf("[users] Seeded %u users into NVS\n",
-                  static_cast<unsigned>(g_users.size()));
+    Serial.printf("[users] Seeded %u users into NVS\n", static_cast<unsigned>(g_users.size()));
   }
 }
 
