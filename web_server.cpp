@@ -163,7 +163,45 @@ static bool isPlausibleUnixTs(const String& ts) {
   return true;
 }
 
+/** GET /open?otp=true&v=...&c=XXXXXX — time-based OTP (see usersValidateOtpForVilla). */
+static void handleOpenOtp() {
+  String villa = argPrefer("villa", "v");
+  String code = server.arg("c");
+  if (code.length() == 0) {
+    code = server.arg("code");
+  }
+  villa.trim();
+  code.trim();
+  if (villa.length() == 0 || code.length() != 6) {
+    server.send(400, "text/plain", "Missing v/villa or c/code (6-digit OTP)");
+    return;
+  }
+  for (unsigned i = 0; i < code.length(); i++) {
+    if (!isdigit(static_cast<unsigned char>(code[i]))) {
+      server.send(400, "text/plain", "Invalid OTP format");
+      return;
+    }
+  }
+  String mobile;
+  if (!usersValidateOtpForVilla(villa, code, mobile)) {
+    server.send(401, "text/plain", "Invalid OTP");
+    addLog(villa, "-", "Denied-OTP");
+    return;
+  }
+  server.send(200, "text/html", buildResponse("Access Granted", "green", GATE_ICON_OK, villa, "", true));
+  addLog(villa, mobile, "GRANTED-OTP");
+  triggerRelay();
+}
+
 static void handleOpen() {
+  String otpFlag = server.arg("otp");
+  otpFlag.trim();
+  otpFlag.toLowerCase();
+  if (otpFlag == "true" || otpFlag == "1") {
+    handleOpenOtp();
+    return;
+  }
+
   String mobile = server.arg("m");
   String ts = server.arg("t");
   String sig = server.arg("s");

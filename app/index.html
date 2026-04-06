@@ -14,22 +14,145 @@ button{width:90%;padding:14px;margin:8px;border-radius:10px;border:none;font-siz
 .go{background:#22c55e;color:#fff;}
 .share{background:#2563eb;color:#fff;}
 #qr{margin-top:20px;}
+.otp-card{
+  margin:24px auto 8px;
+  max-width:340px;
+  padding:22px 18px 18px;
+  background:linear-gradient(180deg,#1e293b 0%,#0f172a 100%);
+  border:1px solid #334155;
+  border-radius:16px;
+  box-shadow:0 8px 24px rgba(0,0,0,.35);
+}
+.otp-label{
+  font-size:11px;
+  text-transform:uppercase;
+  letter-spacing:0.12em;
+  color:#94a3b8;
+  margin:0 0 4px;
+  font-weight:600;
+}
+.otp-sub{
+  font-size:13px;
+  color:#64748b;
+  margin:0 0 16px;
+  line-height:1.35;
+}
+#otpOut{
+  font-family:ui-monospace,SFMono-Regular,"Cascadia Mono","Roboto Mono",Menlo,monospace;
+  font-size:clamp(32px,10vw,44px);
+  font-weight:700;
+  font-variant-numeric:tabular-nums;
+  letter-spacing:0.08em;
+  color:#fef3c7;
+  text-shadow:0 1px 2px rgba(0,0,0,.4);
+  margin:0;
+  min-height:1.15em;
+  line-height:1.2;
+}
+#otpOut.otp-empty{
+  color:#64748b;
+  font-size:28px;
+  letter-spacing:0.04em;
+}
+#otpHint{
+  font-size:13px;
+  color:#94a3b8;
+  margin:14px 0 0;
+  min-height:1.2em;
+  line-height:1.4;
+}
 </style>
 </head>
 <body>
 
 <div class="container">
 <h2>Lakeridge Gate Access</h2>
-<input id="mobile" placeholder="Mobile">
+<input id="mobile" placeholder="Mobile" inputmode="numeric">
 <input id="secret" placeholder="Access Key">
 <button class="save" onclick="save()">Save</button>
 <button class="go" onclick="generateQR()">Generate QR</button>
 <button class="share" onclick="shareQR()">Share QR</button>
 <canvas id="qr"></canvas>
+<section class="otp-card" aria-label="Gate OTP">
+  <p class="otp-label">Gate code</p>
+  <p class="otp-sub">Current 5-minute window — read these digits aloud on a call.</p>
+  <p id="otpOut" class="otp-empty" role="status" aria-live="polite"></p>
+  <p id="otpHint"></p>
+</section>
 </div>
 
 <script>
 let currentCanvas = null;
+
+/** Same 32-bit djb2 as firmware users.cpp (djb2_u32). */
+function djb2(str) {
+  let h = 5381 >>> 0;
+  for (let i = 0; i < str.length; i++) {
+    h = (((h << 5) + h) + str.charCodeAt(i)) >>> 0;
+  }
+  return h >>> 0;
+}
+
+/** Same formula as ESP32: (timeWindow + djb2(secret)%1e6) % 1e6 */
+function generateOTP(secret) {
+  const now = Math.floor(Date.now() / 1000);
+  const timeWindow = Math.floor(now / 300);
+  const secretNum = djb2(secret) % 1000000;
+  return ((timeWindow + secretNum) % 1000000).toString().padStart(6, "0");
+}
+
+function currentOtpWindow() {
+  return Math.floor(Date.now() / 1000 / 300);
+}
+
+function secondsUntilNextOtpWindow() {
+  const now = Math.floor(Date.now() / 1000);
+  return (currentOtpWindow() + 1) * 300 - now;
+}
+
+let lastRenderedOtpWindow = null;
+
+/** Groups as "123 456" for easier verbal reading; still one 6-digit code for the gate. */
+function formatOtpForDisplay(digits6) {
+  if (!digits6 || digits6.length !== 6 || !/^\d{6}$/.test(digits6)) {
+    return digits6;
+  }
+  return digits6.slice(0, 3) + "  " + digits6.slice(3);
+}
+
+function refreshOtpDisplay() {
+  const secret = localStorage.getItem("secret");
+  const out = document.getElementById("otpOut");
+  const hint = document.getElementById("otpHint");
+  if (!out || !hint) return;
+  if (!secret) {
+    out.textContent = "—";
+    out.classList.add("otp-empty");
+    hint.textContent = "Save your mobile and access key to see the code";
+    lastRenderedOtpWindow = null;
+    return;
+  }
+  out.classList.remove("otp-empty");
+  const tw = currentOtpWindow();
+  out.textContent = formatOtpForDisplay(generateOTP(secret));
+  lastRenderedOtpWindow = tw;
+  hint.textContent = "New code in " + secondsUntilNextOtpWindow() + "s";
+}
+
+function tickOtp() {
+  const secret = localStorage.getItem("secret");
+  if (!secret) {
+    refreshOtpDisplay();
+    return;
+  }
+  const tw = currentOtpWindow();
+  if (lastRenderedOtpWindow !== tw) {
+    refreshOtpDisplay();
+  } else {
+    const hint = document.getElementById("otpHint");
+    if (hint) hint.textContent = "New code in " + secondsUntilNextOtpWindow() + "s";
+  }
+}
 
 function getDeviceId() {
   let id = localStorage.getItem("gateDeviceId");
@@ -38,18 +161,6 @@ function getDeviceId() {
     localStorage.setItem("gateDeviceId", id);
   }
   return id;
-}
-
-async function hmacSHA256(key, data) {
-  const enc = new TextEncoder();
-  const cryptoKey = await crypto.subtle.importKey(
-    "raw", enc.encode(key),
-    { name: "HMAC", hash: "SHA-256" },
-    false, ["sign"]
-  );
-  const signature = await crypto.subtle.sign("HMAC", cryptoKey, enc.encode(data));
-  return Array.from(new Uint8Array(signature))
-    .map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
 function save() {
@@ -63,6 +174,7 @@ function save() {
 
   localStorage.setItem("mobile", mobile);
   localStorage.setItem("secret", secret);
+  refreshOtpDisplay();
 
   alert("Saved");
 }
@@ -76,12 +188,43 @@ async function generateQR() {
   const sig = await hmacSHA256(secret, mobile+ts);
   const deviceId = getDeviceId();
 
-  const url = `http://192.168.4.1/open?m=${mobile}&t=${ts}&d=${deviceId}&s=${sig}`;
+  const url = "http://192.168.4.1/open?m=" + encodeURIComponent(mobile)
+    + "&t=" + encodeURIComponent(String(ts))
+    + "&d=" + encodeURIComponent(deviceId)
+    + "&s=" + encodeURIComponent(sig)
+    + "&otp=false";
 
   QRCode.toCanvas(document.getElementById("qr"), url, function(err, canvas){
     if (!err) currentCanvas = canvas;
   });
 }
+
+async function hmacSHA256(key, data) {
+  const enc = new TextEncoder();
+  const cryptoKey = await crypto.subtle.importKey(
+    "raw", enc.encode(key),
+    { name: "HMAC", hash: "SHA-256" },
+    false, ["sign"]
+  );
+  const signature = await crypto.subtle.sign("HMAC", cryptoKey, enc.encode(data));
+  return Array.from(new Uint8Array(signature))
+    .map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+window.addEventListener("load", function () {
+  const m = localStorage.getItem("mobile");
+  const s = localStorage.getItem("secret");
+  if (m) document.getElementById("mobile").value = m;
+  if (s) document.getElementById("secret").value = s;
+  refreshOtpDisplay();
+  setInterval(tickOtp, 1000);
+});
+
+document.addEventListener("visibilitychange", function () {
+  if (document.visibilityState === "visible") {
+    refreshOtpDisplay();
+  }
+});
 
 function shareQR() {
   if (!currentCanvas) {
@@ -92,7 +235,6 @@ function shareQR() {
   currentCanvas.toBlob(function (blob) {
     const file = new File([blob], "gate_qr.png", { type: "image/png" });
 
-    // ✅ Try file share (best case)
     if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
       navigator.share({
         files: [file],
@@ -102,7 +244,6 @@ function shareQR() {
       fallbackShare();
     }
 
-    // 🔁 Fallback → WhatsApp URL share
     function fallbackShare() {
       const text = "Scan this QR at gate";
       const waUrl = "https://wa.me/?text=" + encodeURIComponent(text);
@@ -114,8 +255,8 @@ function shareQR() {
   });
 }
 
-if ('serviceWorker' in navigator) {
- navigator.serviceWorker.register('sw.js');
+if ("serviceWorker" in navigator) {
+ navigator.serviceWorker.register("sw.js");
 }
 </script>
 

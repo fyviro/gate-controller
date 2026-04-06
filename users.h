@@ -16,6 +16,12 @@ bool usersRequireAdmin(const String& adminToken, String& errMsg);
 bool getUser(String mobile, String& key, String& villa, String& deviceId);
 
 /**
+ * OTP mode (/open?otp=true&...): match 6-digit code for any resident of villa (RTC unix, 5 min buckets).
+ * OTP = (timeWindow + djb2(secret)%1e6) % 1e6 — one code per window; PWA disables regenerate until next window.
+ */
+bool usersValidateOtpForVilla(const String& villa, const String& otp6, String& matchedMobile);
+
+/**
  * Enforce device binding after HMAC + time checks.
  * If stored deviceId is empty: requires non-empty requestDeviceId, saves it to NVS.
  * If stored deviceId is set: requestDeviceId must match exactly.

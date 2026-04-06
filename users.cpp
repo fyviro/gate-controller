@@ -7,8 +7,11 @@
 #include <unordered_map>
 #include <vector>
 
+#include <ctype.h>
+
 #include "config.h"
 #include "default_users.h"
+#include "rtc_device.h"
 
 /**
  * User directory: keyed by mobile (std::string) for O(1) lookup.
@@ -23,6 +26,17 @@ struct UserRecord {
 };
 
 static std::unordered_map<std::string, UserRecord> g_users;
+
+/** Runtime-only: villa string -> mobiles in that villa (derived from g_users; not persisted). */
+static std::unordered_map<std::string, std::vector<std::string>> g_villaToMobiles;
+
+static void rebuildVillaIndex() {
+  g_villaToMobiles.clear();
+  g_villaToMobiles.reserve(g_users.size() / 4 + 1);
+  for (const auto& kv : g_users) {
+    g_villaToMobiles[kv.second.villa].push_back(kv.first);
+  }
+}
 
 static const size_t MAX_USERS = 256;
 static const size_t MAX_MOBILE_LEN = 20;
@@ -250,11 +264,15 @@ static bool usersLoadFromNvsInternal() {
       return false;
     }
     g_users.swap(loaded);
+    rebuildVillaIndex();
     return true;
   }
 
   const bool ok = usersLoadLegacyNvs(prefs);
   prefs.end();
+  if (ok) {
+    rebuildVillaIndex();
+  }
   return ok;
 }
 
@@ -331,6 +349,7 @@ void usersInit() {
 
   g_users.clear();
   loadDefaultUsersFromHeader();
+  rebuildVillaIndex();
   if (g_users.empty()) {
     Serial.println("[users] default_users.h produced no users");
     return;
@@ -349,6 +368,56 @@ void usersInit() {
   } else {
     Serial.printf("[users] Seeded %u users into NVS\n", static_cast<unsigned>(g_users.size()));
   }
+}
+
+/** Same 32-bit djb2 as app/index.html (generateOTP). */
+static uint32_t djb2_u32(const std::string& s) {
+  uint32_t h = 5381;
+  for (size_t i = 0; i < s.length(); i++) {
+    h = (((h << 5) + h) + static_cast<uint32_t>(static_cast<unsigned char>(s[i]))) & 0xFFFFFFFFu;
+  }
+  return h;
+}
+
+bool usersValidateOtpForVilla(const String& villaIn, const String& otp6, String& matchedMobile) {
+  /* OTP bucket = unix/300 (5 min). ±1 bucket handles RTC skew. */
+  if (otp6.length() != 6) {
+    return false;
+  }
+  for (unsigned i = 0; i < 6; i++) {
+    if (!isdigit(static_cast<unsigned char>(otp6[i]))) {
+      return false;
+    }
+  }
+  const uint32_t want = static_cast<uint32_t>(otp6.toInt());
+  const std::string villaStd = toStd(villaIn);
+  const uint32_t unixNow = rtc.now().unixtime();
+  const uint32_t tw = unixNow / 300;
+  const auto vit = g_villaToMobiles.find(villaStd);
+  if (vit == g_villaToMobiles.end()) {
+    return false;
+  }
+  for (const std::string& mob : vit->second) {
+    const auto uit = g_users.find(mob);
+    if (uit == g_users.end()) {
+      continue;
+    }
+    const uint32_t sn = djb2_u32(uit->second.owner_key) % 1000000u;
+    for (int delta = -1; delta <= 1; delta++) {
+      int64_t t64 = static_cast<int64_t>(tw) + delta;
+      if (t64 < 0 || t64 > 0xFFFFFFFFLL) {
+        continue;
+      }
+      const uint32_t twUse = static_cast<uint32_t>(t64);
+      const uint32_t otp = static_cast<uint32_t>(
+          (static_cast<uint64_t>(twUse) + static_cast<uint64_t>(sn)) % 1000000ULL);
+      if (otp == want) {
+        matchedMobile = String(mob.c_str());
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 bool getUser(String mobile, String& key, String& villa, String& deviceId) {
@@ -445,9 +514,11 @@ bool usersAdd(const String& mobile, const String& secretKey, const String& villa
 
   if (!usersSaveToNvs()) {
     g_users.erase(inserted.first);
+    rebuildVillaIndex();
     errMsg = "NVS save failed";
     return false;
   }
+  rebuildVillaIndex();
   return true;
 }
 
@@ -551,6 +622,7 @@ bool usersUpdate(const String& mobile, const String& secretKey, const String& vi
     errMsg = "NVS save failed";
     return false;
   }
+  rebuildVillaIndex();
   return true;
 }
 
@@ -692,11 +764,13 @@ bool usersImportCsv(const String& csv, const String& adminToken, String& summary
   g_users.swap(next);
   if (!usersSaveToNvs()) {
     g_users.swap(next);
+    rebuildVillaIndex();
     errMsg = "NVS save failed; no changes applied";
     summary = detail;
     return false;
   }
 
+  rebuildVillaIndex();
   summary = "Added " + String(added) + ", updated " + String(updated) + ", errors " + String(errors) + ".\n" + detail;
   errMsg = "";
   return true;
