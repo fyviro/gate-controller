@@ -14,28 +14,45 @@ button{width:90%;padding:14px;margin:8px;border-radius:10px;border:none;font-siz
 .go{background:#22c55e;color:#fff;}
 .share{background:#2563eb;color:#fff;}
 #qr{margin-top:20px;}
+/* OTP card only: animated aurora frame + dark glass inner */
 .otp-card{
-  margin:24px auto 8px;
+  margin:28px auto 10px;
   max-width:340px;
+  padding:3px;
+  border-radius:22px;
+  background:linear-gradient(125deg,#fbbf24,#f97316,#a855f7,#6366f1,#06b6d4,#c026d3,#fbbf24);
+  background-size:400% 400%;
+  animation:otpAurora 14s ease infinite;
+  box-shadow:
+    0 12px 40px rgba(0,0,0,.45),
+    0 0 80px rgba(168,85,247,.28),
+    0 0 120px rgba(6,182,212,.12);
+}
+@keyframes otpAurora{
+  0%,100%{background-position:0% 40%}
+  50%{background-position:100% 60%}
+}
+.otp-card-inner{
   padding:22px 18px 18px;
-  background:linear-gradient(180deg,#1e293b 0%,#0f172a 100%);
-  border:1px solid #334155;
-  border-radius:16px;
-  box-shadow:0 8px 24px rgba(0,0,0,.35);
+  border-radius:19px;
+  background:linear-gradient(165deg,rgba(15,23,42,.88) 0%,rgba(2,6,23,.94) 55%,rgba(15,23,42,.9) 100%);
+  backdrop-filter:blur(12px);
+  -webkit-backdrop-filter:blur(12px);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.08);
 }
 .otp-label{
   font-size:11px;
   text-transform:uppercase;
   letter-spacing:0.12em;
-  color:#94a3b8;
+  color:#cbd5e1;
   margin:0 0 4px;
   font-weight:600;
 }
 .otp-sub{
-  font-size:13px;
-  color:#64748b;
+  font-size:14px;
+  color:#94a3b8;
   margin:0 0 16px;
-  line-height:1.35;
+  line-height:1.4;
 }
 #otpOut{
   font-family:ui-monospace,SFMono-Regular,"Cascadia Mono","Roboto Mono",Menlo,monospace;
@@ -43,8 +60,8 @@ button{width:90%;padding:14px;margin:8px;border-radius:10px;border:none;font-siz
   font-weight:700;
   font-variant-numeric:tabular-nums;
   letter-spacing:0.08em;
-  color:#fef3c7;
-  text-shadow:0 1px 2px rgba(0,0,0,.4);
+  color:#fffbeb;
+  text-shadow:0 0 24px rgba(251,191,36,.35),0 2px 8px rgba(0,0,0,.5);
   margin:0;
   min-height:1.15em;
   line-height:1.2;
@@ -53,10 +70,11 @@ button{width:90%;padding:14px;margin:8px;border-radius:10px;border:none;font-siz
   color:#64748b;
   font-size:28px;
   letter-spacing:0.04em;
+  text-shadow:none;
 }
 #otpHint{
   font-size:13px;
-  color:#94a3b8;
+  color:#a8b8d0;
   margin:14px 0 0;
   min-height:1.2em;
   line-height:1.4;
@@ -73,11 +91,13 @@ button{width:90%;padding:14px;margin:8px;border-radius:10px;border:none;font-siz
 <button class="go" onclick="generateQR()">Generate QR</button>
 <button class="share" onclick="shareQR()">Share QR</button>
 <canvas id="qr"></canvas>
-<section class="otp-card" aria-label="Gate OTP">
-  <p class="otp-label">Gate code</p>
-  <p class="otp-sub">Current 5-minute window — read these digits aloud on a call.</p>
-  <p id="otpOut" class="otp-empty" role="status" aria-live="polite"></p>
-  <p id="otpHint"></p>
+<section class="otp-card" aria-label="Visitor OTP">
+  <div class="otp-card-inner">
+    <p class="otp-label">Visitor OTP</p>
+    <p class="otp-sub">Share this code with the visitor on a call.</p>
+    <p id="otpOut" class="otp-empty" role="status" aria-live="polite"></p>
+    <p id="otpHint"></p>
+  </div>
 </section>
 </div>
 
@@ -93,12 +113,18 @@ function djb2(str) {
   return h >>> 0;
 }
 
-/** Same formula as ESP32: (timeWindow + djb2(secret)%1e6) % 1e6 */
+/**
+ * Must match users.cpp usersValidateOtpForVilla: payload = owner_key + "|" + decimal(tw),
+ * h = djb2_u32(payload), t = uint32(tw * 0x9E3779B9), otp = (h ^ t) % 1e6.
+ * Use Math.imul for t — plain * can lose uint32 bits when tw*golden exceeds safe integer range.
+ */
 function generateOTP(secret) {
-  const now = Math.floor(Date.now() / 1000);
-  const timeWindow = Math.floor(now / 300);
-  const secretNum = djb2(secret) % 1000000;
-  return ((timeWindow + secretNum) % 1000000).toString().padStart(6, "0");
+  const tw = Math.floor(Date.now() / 1000 / 300);
+  const combined = secret + "|" + String(tw);
+  const h = djb2(combined) >>> 0;
+  const t = Math.imul(tw, 0x9e3779b9) >>> 0;
+  const mixed = (h ^ t) >>> 0;
+  return (mixed % 1000000).toString().padStart(6, "0");
 }
 
 function currentOtpWindow() {

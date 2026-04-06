@@ -17,7 +17,7 @@ bool getUser(String mobile, String& key, String& villa, String& deviceId);
 
 /**
  * OTP mode (/open?otp=true&...): match 6-digit code for any resident of villa (RTC unix, 5 min buckets).
- * OTP = (timeWindow + djb2(secret)%1e6) % 1e6 — one code per window; PWA disables regenerate until next window.
+ * OTP = (djb2(owner_key|timeWindow) ^ (timeWindow * 0x9E3779B9)) % 1e6 — timeWindow = unix/300.
  */
 bool usersValidateOtpForVilla(const String& villa, const String& otp6, String& matchedMobile);
 

@@ -402,15 +402,17 @@ bool usersValidateOtpForVilla(const String& villaIn, const String& otp6, String&
     if (uit == g_users.end()) {
       continue;
     }
-    const uint32_t sn = djb2_u32(uit->second.owner_key) % 1000000u;
     for (int delta = -1; delta <= 1; delta++) {
       int64_t t64 = static_cast<int64_t>(tw) + delta;
       if (t64 < 0 || t64 > 0xFFFFFFFFLL) {
         continue;
       }
       const uint32_t twUse = static_cast<uint32_t>(t64);
-      const uint32_t otp = static_cast<uint32_t>(
-          (static_cast<uint64_t>(twUse) + static_cast<uint64_t>(sn)) % 1000000ULL);
+      /* Same OTP as app/index.html generateOTP: djb2(payload) ^ uint32(tw*0x9E3779B9), mod 1e6 */
+      const std::string payload = uit->second.owner_key + "|" + std::to_string(twUse);
+      const uint32_t h = djb2_u32(payload);
+      const uint32_t t = twUse * 0x9E3779B9u;
+      const uint32_t otp = (h ^ t) % 1000000u;
       if (otp == want) {
         matchedMobile = String(mob.c_str());
         return true;
