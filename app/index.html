@@ -72,10 +72,29 @@ button{width:90%;padding:14px;margin:8px;border-radius:10px;border:none;font-siz
   letter-spacing:0.04em;
   text-shadow:none;
 }
+.otp-timer{
+  margin-top:14px;
+}
+.otp-timer-track{
+  height:10px;
+  border-radius:999px;
+  background:rgba(51,65,85,.85);
+  overflow:hidden;
+  box-shadow:inset 0 1px 2px rgba(0,0,0,.35);
+}
+.otp-timer-fill{
+  height:100%;
+  width:100%;
+  border-radius:999px;
+  background:linear-gradient(90deg,#fbbf24,#f97316,#a855f7);
+  background-size:200% 100%;
+  transition:width 0.5s linear;
+  box-shadow:0 0 12px rgba(251,191,36,.35);
+}
 #otpHint{
   font-size:13px;
   color:#a8b8d0;
-  margin:14px 0 0;
+  margin:10px 0 0;
   min-height:1.2em;
   line-height:1.4;
 }
@@ -96,6 +115,11 @@ button{width:90%;padding:14px;margin:8px;border-radius:10px;border:none;font-siz
     <p class="otp-label">Visitor OTP</p>
     <p class="otp-sub">Share over a call.</p>
     <p id="otpOut" class="otp-empty" role="status" aria-live="polite"></p>
+    <div class="otp-timer" id="otpTimerBlock" hidden>
+      <div class="otp-timer-track" id="otpTimerBar" role="progressbar" aria-valuemin="0" aria-valuemax="300" aria-valuenow="0" aria-label="Time left before this OTP refreshes">
+        <div class="otp-timer-fill" id="otpTimerFill"></div>
+      </div>
+    </div>
     <p id="otpHint"></p>
   </div>
 </section>
@@ -136,6 +160,25 @@ function secondsUntilNextOtpWindow() {
   return (currentOtpWindow() + 1) * 300 - now;
 }
 
+/** 5 min OTP bucket length — must match firmware window (300s). */
+const OTP_WINDOW_SEC = 300;
+
+function updateOtpTimerBar() {
+  const block = document.getElementById("otpTimerBlock");
+  const fill = document.getElementById("otpTimerFill");
+  const bar = document.getElementById("otpTimerBar");
+  if (!block || !fill || !bar) return;
+  if (!localStorage.getItem("secret")) {
+    block.hidden = true;
+    return;
+  }
+  const rem = secondsUntilNextOtpWindow();
+  const pct = Math.min(100, Math.max(0, (rem / OTP_WINDOW_SEC) * 100));
+  fill.style.width = pct + "%";
+  bar.setAttribute("aria-valuenow", String(rem));
+  block.hidden = false;
+}
+
 let lastRenderedOtpWindow = null;
 
 /** Groups as "123 456" for easier verbal reading; still one 6-digit code for the gate. */
@@ -156,13 +199,16 @@ function refreshOtpDisplay() {
     out.classList.add("otp-empty");
     hint.textContent = "Save your mobile and access key to see the code";
     lastRenderedOtpWindow = null;
+    const tb = document.getElementById("otpTimerBlock");
+    if (tb) tb.hidden = true;
     return;
   }
   out.classList.remove("otp-empty");
   const tw = currentOtpWindow();
   out.textContent = formatOtpForDisplay(generateOTP(secret));
   lastRenderedOtpWindow = tw;
-  hint.textContent = "New code in " + secondsUntilNextOtpWindow() + "s";
+  hint.textContent = "";
+  updateOtpTimerBar();
 }
 
 function tickOtp() {
@@ -175,8 +221,7 @@ function tickOtp() {
   if (lastRenderedOtpWindow !== tw) {
     refreshOtpDisplay();
   } else {
-    const hint = document.getElementById("otpHint");
-    if (hint) hint.textContent = "New code in " + secondsUntilNextOtpWindow() + "s";
+    updateOtpTimerBar();
   }
 }
 
@@ -243,7 +288,7 @@ window.addEventListener("load", function () {
   if (m) document.getElementById("mobile").value = m;
   if (s) document.getElementById("secret").value = s;
   refreshOtpDisplay();
-  setInterval(tickOtp, 1000);
+  setInterval(tickOtp, 500);
 });
 
 document.addEventListener("visibilitychange", function () {
