@@ -16,10 +16,10 @@ bool usersRequireAdmin(const String& adminToken, String& errMsg);
 bool getUser(String mobile, String& key, String& villa, String& deviceId);
 
 /**
- * OTP mode (/open?otp=true&...): match 6-digit code for any resident of villa (RTC unix, 5 min buckets).
- * OTP = (djb2(owner_key|timeWindow) ^ (timeWindow * 0x9E3779B9)) % 1e6 — timeWindow = unix/300.
+ * OTP mode (/open?otp=true&...&t=unix): match 6-digit code for any resident of villa (5 min buckets).
+ * OTP = (djb2(owner_key|timeWindow) ^ (timeWindow * 0x9E3779B9)) % 1e6 — timeWindow = unixSeconds/300.
  */
-bool usersValidateOtpForVilla(const String& villa, const String& otp6, String& matchedMobile);
+bool usersValidateOtpForVilla(const String& villa, const String& otp6, String& matchedMobile, uint32_t unixSeconds);
 
 /**
  * Enforce device binding after HMAC + time checks.

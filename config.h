@@ -37,4 +37,7 @@ extern const char* AP_PASSWORD;
  */
 #define MAX_CSV_IMPORT_BYTES 8192
 
+/** OTP (/open?otp=true): max press counter seq per 5 min window (must match app/index.html). */
+#define OTP_MAX_SEQ_PER_WINDOW 127
+
 #endif

@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#6366f1">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Guard">
+<title>Gate Guard</title>
+<!-- Client-side only: open this file from your phone. ESP32 exposes GET /open at the soft-AP; it does not host this HTML. No external scripts — works offline on gate Wi‑Fi. -->
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="apple-touch-icon.png" sizes="180x180">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<link rel="icon" type="image/png" sizes="512x512" href="icon-512.png">
+<style>
+:root {
+  --bg0: #070b14;
+  --bg1: #0f172a;
+  --glass: rgba(30, 41, 59, 0.65);
+  --stroke: rgba(148, 163, 184, 0.2);
+  --text: #f1f5f9;
+  --muted: #94a3b8;
+  --accent: #6366f1;
+  --accent2: #8b5cf6;
+  --safe-b: env(safe-area-inset-bottom, 12px);
+  --safe-t: env(safe-area-inset-top, 12px);
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; min-height: 100%; }
+body {
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color: var(--text);
+  background: var(--bg0);
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+.bg-aurora {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  background:
+    radial-gradient(ellipse 120% 80% at 50% -20%, rgba(99, 102, 241, 0.35), transparent 50%),
+    radial-gradient(ellipse 80% 60% at 100% 50%, rgba(139, 92, 246, 0.12), transparent 45%),
+    radial-gradient(ellipse 60% 40% at 0% 80%, rgba(6, 182, 212, 0.08), transparent 40%),
+    linear-gradient(180deg, var(--bg0) 0%, var(--bg1) 100%);
+  pointer-events: none;
+}
+.app {
+  position: relative;
+  z-index: 1;
+  max-width: 440px;
+  margin: 0 auto;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  padding: var(--safe-t) 16px calc(20px + var(--safe-b));
+}
+.brand {
+  text-align: center;
+  padding: 8px 0 20px;
+}
+.brand-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 16px;
+  background: linear-gradient(135deg, var(--accent), var(--accent2));
+  box-shadow: 0 12px 40px rgba(99, 102, 241, 0.4);
+  margin-bottom: 12px;
+}
+.brand-badge svg { width: 26px; height: 26px; color: #fff; }
+.brand h1 {
+  font-size: 1.35rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin: 0;
+}
+.brand p { margin: 6px 0 0; font-size: 13px; color: var(--muted); }
+.btn-install-pwa {
+  margin-top: 12px;
+  padding: 10px 20px;
+  border-radius: 999px;
+  border: 1px solid rgba(99, 102, 241, 0.5);
+  background: rgba(99, 102, 241, 0.15);
+  color: #c7d2fe;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.btn-install-pwa:active { transform: scale(0.98); }
+
+.glass-card {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: var(--glass);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--stroke);
+  border-radius: 24px;
+  padding: 18px;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.45);
+}
+.section-title {
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--muted);
+  margin: 0 0 12px;
+}
+.hint { font-size: 12px; color: var(--muted); line-height: 1.45; margin: 0 0 14px; }
+
+.field { margin-bottom: 12px; text-align: left; }
+.field label {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+.field input {
+  width: 100%;
+  padding: 16px 16px;
+  border-radius: 14px;
+  border: 1px solid var(--stroke);
+  background: rgba(15, 23, 42, 0.8);
+  color: var(--text);
+  font-size: 20px;
+  letter-spacing: 0.06em;
+}
+.field input:focus {
+  outline: none;
+  border-color: rgba(99, 102, 241, 0.6);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2);
+}
+.field input::placeholder { color: #64748b; }
+.btn-otp {
+  width: 100%;
+  margin-top: 8px;
+  padding: 18px;
+  border: none;
+  border-radius: 18px;
+  font-size: 17px;
+  font-weight: 700;
+  cursor: pointer;
+  color: #fff;
+  background: linear-gradient(145deg, #6366f1, #4f46e5);
+  box-shadow: 0 16px 32px rgba(99, 102, 241, 0.35), inset 0 1px 0 rgba(255,255,255,0.15);
+}
+.btn-otp:active { transform: scale(0.99); }
+
+.loading-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: rgba(7, 11, 20, 0.75);
+  backdrop-filter: blur(6px);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 16px;
+}
+.loading-overlay.show { display: flex; }
+.spinner {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  border: 3px solid rgba(99, 102, 241, 0.2);
+  border-top-color: var(--accent);
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.loading-overlay p { margin: 0; font-size: 14px; color: var(--muted); }
+
+.result-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  background: rgba(7, 11, 20, 0.6);
+  backdrop-filter: blur(8px);
+  display: none;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 16px;
+  padding-bottom: calc(16px + var(--safe-b));
+}
+.result-overlay.show { display: flex; animation: fadeIn 0.25s ease; }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+.result-sheet {
+  width: 100%;
+  max-width: 440px;
+  border-radius: 28px 28px 22px 22px;
+  padding: 28px 24px 24px;
+  text-align: center;
+  transform: translateY(100%);
+  animation: sheetIn 0.4s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  box-shadow: 0 -20px 60px rgba(0,0,0,0.5);
+}
+@keyframes sheetIn {
+  from { transform: translateY(100%); opacity: 0.8; }
+  to { transform: translateY(0); opacity: 1; }
+}
+.result-sheet.success {
+  background: linear-gradient(180deg, rgba(16, 185, 129, 0.15) 0%, rgba(15, 23, 42, 0.98) 28%);
+  border: 1px solid rgba(16, 185, 129, 0.35);
+}
+.result-sheet.error {
+  background: linear-gradient(180deg, rgba(244, 63, 94, 0.12) 0%, rgba(15, 23, 42, 0.98) 28%);
+  border: 1px solid rgba(244, 63, 94, 0.35);
+}
+.result-icon {
+  width: 72px;
+  height: 72px;
+  margin: 0 auto 16px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: pop 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+@keyframes pop {
+  from { transform: scale(0.3); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+.result-sheet.success .result-icon {
+  background: linear-gradient(145deg, rgba(16,185,129,0.3), rgba(16,185,129,0.1));
+  color: #34d399;
+  box-shadow: 0 0 40px rgba(16, 185, 129, 0.25);
+}
+.result-sheet.error .result-icon {
+  background: linear-gradient(145deg, rgba(244,63,94,0.25), rgba(244,63,94,0.08));
+  color: #fb7185;
+  box-shadow: 0 0 40px rgba(244, 63, 94, 0.2);
+}
+.result-icon svg { width: 40px; height: 40px; }
+.result-sheet h2 {
+  margin: 0 0 8px;
+  font-size: 1.5rem;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+}
+.result-sheet.success h2 { color: #6ee7b7; }
+.result-sheet.error h2 { color: #fda4af; }
+.result-sheet .sub {
+  margin: 0 0 24px;
+  font-size: 14px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+.btn-dismiss {
+  width: 100%;
+  padding: 16px;
+  border-radius: 16px;
+  border: none;
+  font-size: 16px;
+  font-weight: 700;
+  cursor: pointer;
+  background: rgba(51, 65, 85, 0.8);
+  color: var(--text);
+}
+</style>
+</head>
+<body>
+<div class="bg-aurora" aria-hidden="true"></div>
+
+<div class="app">
+  <header class="brand">
+    <div class="brand-badge" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+    </div>
+    <h1>Gate Guard</h1>
+    <p>Visitor OTP — enter villa and code from the resident</p>
+    <button type="button" class="btn-install-pwa" id="btnInstallPwa" hidden>Install app</button>
+    <p class="hint-ios" style="font-size:11px;color:#64748b;margin-top:8px;display:none" id="hintIosA2hs">iPhone/iPad: Safari → Share → Add to Home Screen</p>
+  </header>
+
+  <section aria-label="OTP verification">
+    <div class="glass-card">
+      <p class="section-title">Verify</p>
+      <p class="hint">Resident QR codes can be opened with the phone’s built-in camera or QR app. This screen is only for the 6-digit visitor code.</p>
+      <div class="field">
+        <label for="villa">Villa</label>
+        <input id="villa" type="text" placeholder="e.g. A-12" autocomplete="off" autocapitalize="characters">
+      </div>
+      <div class="field">
+        <label for="code">Code</label>
+        <input id="code" type="text" placeholder="••••••" inputmode="numeric" maxlength="6" pattern="[0-9]*" autocomplete="one-time-code">
+      </div>
+      <button type="button" class="btn-otp" onclick="submitOtp()">Verify &amp; open gate</button>
+    </div>
+  </section>
+</div>
+
+<div class="loading-overlay" id="loadingOverlay" role="status" aria-live="polite" aria-busy="true">
+  <div class="spinner"></div>
+  <p id="loadingText">Contacting gate…</p>
+</div>
+
+<div class="result-overlay" id="resultOverlay" role="dialog" aria-modal="true" aria-labelledby="resultTitle" onclick="if(event.target===this)dismissResult()">
+  <div class="result-sheet" id="resultSheet" onclick="event.stopPropagation()">
+    <div class="result-icon" id="resultIcon"></div>
+    <h2 id="resultTitle">—</h2>
+    <p class="sub" id="resultSub"></p>
+    <button type="button" class="btn-dismiss" onclick="dismissResult()">Done</button>
+  </div>
+</div>
+
+<script>
+(function () {
+  /** GET /open?otp=true&v=&c=&t= — this page is client-only; no CDN scripts. */
+  var GATE_BASE = "http://192.168.4.1";
+
+  function setLoading(show, text) {
+    var o = document.getElementById("loadingOverlay");
+    var t = document.getElementById("loadingText");
+    if (t && text) t.textContent = text;
+    if (o) o.classList.toggle("show", !!show);
+  }
+
+  function parseResponseBody(htmlOrText, contentType, ok, status) {
+    var title = ok ? "Access granted" : "Access denied";
+    var sub = "";
+    if (contentType && contentType.indexOf("text/html") !== -1) {
+      try {
+        var doc = new DOMParser().parseFromString(htmlOrText, "text/html");
+        var h2 = doc.querySelector("h2");
+        if (h2 && h2.textContent) title = h2.textContent.trim();
+        var parts = [];
+        var h3 = doc.querySelector("h3");
+        if (h3 && h3.textContent) parts.push(h3.textContent.trim());
+        var p = doc.querySelector(".card p");
+        if (p && p.textContent) parts.push(p.textContent.trim());
+        sub = parts.join(" · ");
+      } catch (e) {}
+    } else {
+      sub = (htmlOrText || "").trim().slice(0, 280);
+      if (!sub) sub = status ? "HTTP " + status : "";
+    }
+    if (/Access Granted/i.test(htmlOrText)) title = "Access granted";
+    if (/Access Denied/i.test(htmlOrText) && !ok) title = "Access denied";
+    return { title: title, sub: sub };
+  }
+
+  function showResult(success, title, sub) {
+    var overlay = document.getElementById("resultOverlay");
+    var sheet = document.getElementById("resultSheet");
+    var h = document.getElementById("resultTitle");
+    var s = document.getElementById("resultSub");
+    var icon = document.getElementById("resultIcon");
+    if (!overlay || !sheet || !h || !s || !icon) return;
+    sheet.classList.remove("success", "error");
+    sheet.classList.add(success ? "success" : "error");
+    icon.innerHTML = success
+      ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 6L9 17l-5-5"/></svg>'
+      : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 6L6 18M6 6l12 12"/></svg>';
+    h.textContent = title;
+    s.textContent = sub || (success ? "Gate should open." : "Check with the resident or try again.");
+    overlay.classList.add("show");
+    sheet.style.animation = "none";
+    void sheet.offsetWidth;
+    sheet.style.animation = "";
+  }
+
+  window.dismissResult = function () {
+    var overlay = document.getElementById("resultOverlay");
+    if (overlay) overlay.classList.remove("show");
+  };
+
+  window.fetchGateUrl = function (url, loadingMsg) {
+    setLoading(true, loadingMsg || "Contacting gate…");
+    return fetch(url, { method: "GET", credentials: "omit", cache: "no-store" })
+      .then(function (r) {
+        var ct = r.headers.get("content-type") || "";
+        return r.text().then(function (body) {
+          return { ok: r.ok, status: r.status, contentType: ct, body: body };
+        });
+      })
+      .finally(function () {
+        setLoading(false);
+      })
+      .then(function (res) {
+        var parsed = parseResponseBody(res.body, res.contentType, res.ok, res.status);
+        var success = res.ok && res.status === 200;
+        showResult(success, parsed.title, parsed.sub);
+        return res;
+      })
+      .catch(function (err) {
+        showResult(false, "Network error", (err && err.message) || "Cannot reach the gate. On gate Wi‑Fi?");
+      });
+  };
+
+  window.submitOtp = function () {
+    var v = document.getElementById("villa").value.trim();
+    var c = document.getElementById("code").value.replace(/\D/g, "").slice(0, 6);
+    if (!v) {
+      showResult(false, "Missing villa", "Enter the villa id.");
+      return;
+    }
+    if (c.length !== 6) {
+      showResult(false, "Invalid code", "Enter 6 digits.");
+      return;
+    }
+    var t = Math.floor(Date.now() / 1000);
+    var url =
+      GATE_BASE +
+      "/open?otp=true&v=" +
+      encodeURIComponent(v) +
+      "&c=" +
+      encodeURIComponent(c) +
+      "&t=" +
+      encodeURIComponent(String(t));
+    fetchGateUrl(url, "Verifying OTP…");
+  };
+
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("./sw.js", { scope: "./" }).then(function () {
+      if (navigator.serviceWorker.controller) return;
+      return navigator.serviceWorker.ready;
+    }).catch(function () {});
+  }
+
+  window.addEventListener("beforeinstallprompt", function (e) {
+    e.preventDefault();
+    window.__guardInstallPrompt = e;
+    var b = document.getElementById("btnInstallPwa");
+    if (b) {
+      b.hidden = false;
+      b.onclick = function () {
+        if (!window.__guardInstallPrompt) return;
+        window.__guardInstallPrompt.prompt();
+        window.__guardInstallPrompt.userChoice.then(function () {
+          window.__guardInstallPrompt = null;
+          b.hidden = true;
+        });
+      };
+    }
+  });
+  if (/iPhone|iPad|iPod/i.test(navigator.userAgent)) {
+    var h = document.getElementById("hintIosA2hs");
+    if (h) h.style.display = "block";
+  }
+})();
+</script>
+</body>
+</html>

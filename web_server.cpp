@@ -163,17 +163,30 @@ static bool isPlausibleUnixTs(const String& ts) {
   return true;
 }
 
-/** GET /open?otp=true&v=...&c=XXXXXX — time-based OTP (see usersValidateOtpForVilla). */
+/** Same relative clock as QR /open (no RTC): baseTS/baseMillis + millis drift. */
+static bool relativeTokenWithinWindow(long tokenTime) {
+  long nowMillis = millis() / 1000;
+  if (baseTS == 0) {
+    baseTS = tokenTime;
+    baseMillis = nowMillis;
+  }
+  long currentTime = baseTS + (nowMillis - baseMillis);
+  return labs(currentTime - tokenTime) <= QR_VALID_WINDOW_SEC;
+}
+
+/** GET /open?otp=true&v=...&c=...&t=unix — time-based OTP (see usersValidateOtpForVilla). */
 static void handleOpenOtp() {
   String villa = argPrefer("villa", "v");
   String code = server.arg("c");
+  String ts = server.arg("t");
   if (code.length() == 0) {
     code = server.arg("code");
   }
   villa.trim();
   code.trim();
-  if (villa.length() == 0 || code.length() != 6) {
-    server.send(400, "text/plain", "Missing v/villa or c/code (6-digit OTP)");
+  ts.trim();
+  if (villa.length() == 0 || code.length() != 6 || ts.length() == 0) {
+    server.send(400, "text/plain", "Missing v/villa, c/code (6-digit), or t (unix timestamp)");
     return;
   }
   for (unsigned i = 0; i < code.length(); i++) {
@@ -182,8 +195,19 @@ static void handleOpenOtp() {
       return;
     }
   }
+  if (!isPlausibleUnixTs(ts)) {
+    server.send(403, "text/plain", "Invalid timestamp");
+    return;
+  }
+  const long tokenTime = ts.toInt();
+  if (!relativeTokenWithinWindow(tokenTime)) {
+    server.send(403, "text/plain", "OTP expired");
+    addLog(villa, "-", "Denied-OTP-expired");
+    return;
+  }
   String mobile;
-  if (!usersValidateOtpForVilla(villa, code, mobile)) {
+  const uint32_t unixSec = static_cast<uint32_t>(tokenTime);
+  if (!usersValidateOtpForVilla(villa, code, mobile, unixSec)) {
     server.send(401, "text/plain", "Invalid OTP");
     addLog(villa, "-", "Denied-OTP");
     return;
@@ -243,18 +267,9 @@ static void handleOpen() {
     }
   }
 
-  // ⏱ Time validation (no RTC)
-  long tokenTime = ts.toInt();
-  long nowMillis = millis() / 1000;
-
-  if (baseTS == 0) {
-    baseTS = tokenTime;
-    baseMillis = nowMillis;
-  }
-
-  long currentTime = baseTS + (nowMillis - baseMillis);
-
-  if (labs(currentTime - tokenTime) > QR_VALID_WINDOW_SEC) {
+  // ⏱ Time validation (no RTC) — same helper as OTP
+  const long tokenTime = ts.toInt();
+  if (!relativeTokenWithinWindow(tokenTime)) {
     server.send(403, "text/html",
       buildResponse("Access Denied", "red", "❌", villa, "QR Expired", false));
     addLog(villa, mobile, "Expired");

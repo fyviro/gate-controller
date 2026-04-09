@@ -11,7 +11,6 @@
 
 #include "config.h"
 #include "default_users.h"
-#include "rtc_device.h"
 
 /**
  * User directory: keyed by mobile (std::string) for O(1) lookup.
@@ -379,8 +378,18 @@ static uint32_t djb2_u32(const std::string& s) {
   return h;
 }
 
-bool usersValidateOtpForVilla(const String& villaIn, const String& otp6, String& matchedMobile) {
-  /* OTP bucket = unix/300 (5 min). ±1 bucket handles RTC skew. */
+/** 6-digit decimal value (leading zeros OK). */
+static uint32_t otp6ToUint32(const String& s) {
+  uint32_t v = 0;
+  for (unsigned i = 0; i < 6; i++) {
+    v = v * 10u + static_cast<uint32_t>(static_cast<unsigned char>(s[i]) - static_cast<unsigned char>('0'));
+  }
+  return v;
+}
+
+bool usersValidateOtpForVilla(const String& villaIn, const String& otp6, String& matchedMobile,
+                              uint32_t unixSeconds) {
+  /* OTP bucket = unix/300 (5 min). ±1 bucket handles small skew. */
   if (otp6.length() != 6) {
     return false;
   }
@@ -389,10 +398,9 @@ bool usersValidateOtpForVilla(const String& villaIn, const String& otp6, String&
       return false;
     }
   }
-  const uint32_t want = static_cast<uint32_t>(otp6.toInt());
+  const uint32_t want = otp6ToUint32(otp6);
   const std::string villaStd = toStd(villaIn);
-  const uint32_t unixNow = rtc.now().unixtime();
-  const uint32_t tw = unixNow / 300;
+  const uint32_t tw = unixSeconds / 300;
   const auto vit = g_villaToMobiles.find(villaStd);
   if (vit == g_villaToMobiles.end()) {
     return false;
